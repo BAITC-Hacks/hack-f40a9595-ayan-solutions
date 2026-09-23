@@ -1,5 +1,6 @@
 """Bounded analyst brief: local facts with optional structured model synthesis."""
 
+from copy import deepcopy
 import json
 import os
 import re
@@ -15,18 +16,23 @@ PROMPT = (
     "Do not invent identities, transfers, amounts, dates, or other facts. "
     "Keep numbers out of prose; the application displays verified numbers separately. "
     "Daily overlap does not prove the order or identity of transferred funds. "
-    "Cite only evidence_refs and related_gids available in the context. "
+    "Cite only evidence_refs and related_gids allowed by the response schema. "
+    "Return at most five entries in each list. "
     "Suggest one or two concrete next checks for missing information."
 )
 FIELDS = ["summary", "evidence_refs", "related_gids", "limitations", "next_checks"]
+EVIDENCE_REFS = [
+    "in_degree", "out_degree", "in_kzt", "out_kzt", "seed_reach", "cluster_id",
+    "depth", "role", "priority_score", "active_days", "same_day_both",
+]
 SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
-        "evidence_refs": {"type": "array", "items": {"type": "string"}},
-        "related_gids": {"type": "array", "items": {"type": "string"}},
-        "limitations": {"type": "array", "items": {"type": "string"}},
-        "next_checks": {"type": "array", "items": {"type": "string"}},
+        "evidence_refs": {"type": "array", "items": {"type": "string", "enum": EVIDENCE_REFS}, "maxItems": 5},
+        "related_gids": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "limitations": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "next_checks": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
     },
     "required": FIELDS,
     "additionalProperties": False,
@@ -87,8 +93,7 @@ def validate_brief(brief, context):
             raise ValueError(f"Model {key} is invalid")
     if set(brief["related_gids"]) - set(context["related_gids"]):
         raise ValueError("Model cited a gid absent from context")
-    allowed = {"in_degree", "out_degree", "in_kzt", "out_kzt", "seed_reach", "cluster_id", "depth", "role", "priority_score", "active_days", "same_day_both"}
-    if set(brief["evidence_refs"]) - allowed or not brief["evidence_refs"]:
+    if set(brief["evidence_refs"]) - set(EVIDENCE_REFS) or not brief["evidence_refs"]:
         raise ValueError("Model cited unsupported evidence")
     if re.search(r"\d", " ".join([brief["summary"], *brief["limitations"], *brief["next_checks"]])):
         raise ValueError("Model prose contains unverified numbers")
@@ -100,11 +105,16 @@ def model_brief(context, api_key=None, model=None):
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured")
     model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    schema = deepcopy(SCHEMA)
+    if context["related_gids"]:
+        schema["properties"]["related_gids"]["items"]["enum"] = context["related_gids"]
+    else:
+        schema["properties"]["related_gids"]["maxItems"] = 0
     payload = {
         "model": model,
         "instructions": PROMPT,
         "input": json.dumps(context, ensure_ascii=False),
-        "text": {"format": {"type": "json_schema", "name": "analyst_brief", "strict": True, "schema": SCHEMA}},
+        "text": {"format": {"type": "json_schema", "name": "analyst_brief", "strict": True, "schema": schema}},
         "store": False,
     }
     response = requests.post(
