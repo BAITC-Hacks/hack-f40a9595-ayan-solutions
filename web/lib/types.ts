@@ -8,6 +8,10 @@ export type RoleCode =
 export type Gid = string;
 export type KztDecimal = string;
 export interface NodeSummary {
+  incoming_kzt?: string;
+  outgoing_kzt?: string;
+  unique_senders?: number;
+  unique_receivers?: number;
   gid: Gid;
   role: RoleCode;
   role_score: number;
@@ -132,6 +136,15 @@ export interface EdgeDetail extends GraphEdge {
   transactions: Paged<Transaction>;
 }
 export interface AIResponse {
+  dialogue?: {
+    question: string;
+    answer: {
+      answer: string;
+      evidence_refs: string[];
+      related_gids: string[];
+      limitations: string[];
+    };
+  };
   run_id: string;
   gid: Gid;
   mode: "rules" | "llm";

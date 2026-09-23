@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from decimal import Decimal
 import io
+import hashlib
 import json
 import os
 import threading
@@ -21,12 +22,13 @@ from ai_chat import FACT_LABELS, chat_context, model_answer, validate_question
 from ai_safety import AI_POLICY_VERSION, UnsafeAIInput
 from analysis import ROLES, load_data
 from run_store import LIMITS, ROLE_NAMES, ROOT, RunStore, decimal_sum, money
+from research import simulate_removal
 
 load_dotenv(ROOT / ".env")
 store = RunStore(os.getenv("GRAPH_RUNS_DIR"), os.getenv("GRAPH_DATA_DIR"))
 app = FastAPI(title="Graph Money", docs_url="/api/docs")
 CAPABILITIES = {name: True for name in ("network", "overview", "nodes", "clusters", "reports", "methodology", "ai", "settings")}
-CAPABILITIES.update(impact=False, paths=False, saved_reports=False, minimap=False, upload=False)
+CAPABILITIES.update(impact=True, paths=False, saved_reports=False, minimap=False, upload=False)
 ai_cache = {}
 ai_lock = threading.Lock()
 
@@ -284,6 +286,23 @@ class AIRequest(BaseModel):
     gid: str = Field(min_length=1, max_length=30, pattern=r"^\d+$")
     action: Literal["explain", "challenge", "next", "question"] = "explain"
     question: str = Field(default="", max_length=1000)
+    history: list[dict] = Field(default_factory=list, max_length=6)
+
+
+class ImpactRequest(BaseModel):
+    gid: str = Field(min_length=1, max_length=30, pattern=r"^\d+$")
+
+
+@app.post("/api/runs/{rid}/impact")
+def impact(rid: str, body: ImpactRequest):
+    snap = snapshot(rid)
+    node(snap, body.gid)
+    try:
+        return {"run_id": rid, **simulate_removal(snap.result.graph, int(body.gid))}
+    except TimeoutError:
+        fail(504, "impact_timeout", "Превышено время эксперимента. Исходный граф не изменён.", True)
+    except ValueError as exc:
+        fail(422, "impact_limit", str(exc))
 
 
 @app.post("/api/runs/{rid}/ai")
@@ -294,11 +313,14 @@ def ai(rid: str, body: AIRequest):
                  "challenge": "Какие ограничения и контраргументы не позволяют считать эту роль установленным фактом?",
                  "next": "Что следует проверить дальше и какие данные для этого отсутствуют?"}
     question = body.question if body.action == "question" else questions[body.action]
+    if len(json.dumps(body.history, ensure_ascii=False)) > 20000:
+        fail(422, "history_too_large", "История превышает допустимый размер.")
     try:
         validate_question(question)
     except (ValueError, UnsafeAIInput):
         fail(422, "unsafe_question", "Вопрос отклонён защитой. Задайте вопрос о признаках и связях выбранного узла.")
-    key = (rid, body.gid, AI_POLICY_VERSION, body.action, question)
+    history_hash = hashlib.sha256(json.dumps(body.history, sort_keys=True).encode()).hexdigest()
+    key = (rid, body.gid, AI_POLICY_VERSION, body.action, question, history_hash)
     if key in ai_cache:
         return {**ai_cache[key], "cached": True}
     context = chat_context(snap.result, int(body.gid))
@@ -312,11 +334,14 @@ def ai(rid: str, body: AIRequest):
     if not ai_lock.acquire(blocking=False):
         fail(429, "ai_busy", "Другой AI-запрос выполняется. Повторите после его завершения.", True)
     try:
-        answer = model_answer(context, question)
+        answer = model_answer(context, question, history=body.history)
         response = {**base, "mode": "llm", "interpretation": answer["answer"],
                     "counterarguments": answer["limitations"] + base["counterarguments"],
                     "references": list(dict.fromkeys([body.gid, *answer["related_gids"]])),
-                    "facts": [{"key": key, "label": FACT_LABELS.get(key, key), "value": context["facts"][key]} for key in answer["evidence_refs"]]}
+                    "facts": [{"key": key, "label": FACT_LABELS.get(key, key), "value": context["facts"][key]} for key in answer["evidence_refs"]],
+                    "dialogue": {"question": question, "answer": answer}}
+        if len(ai_cache) >= 256:
+            ai_cache.pop(next(iter(ai_cache)))
         ai_cache[key] = response
         return response
     except Exception:

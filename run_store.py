@@ -121,6 +121,7 @@ class Snapshot:
                 "priority_explanation": "Взвешенная сумма процентилей среди положительных значений. Для изолированных узлов принудительно ноль. Это порядок проверки, не вероятность.",
                 "priority_factors": [{"label": label, "normalized": float(value), "weight": weight,
                                       "contribution": float(value * weight)} for label, value, weight in factors]}
+            node.update({key: self.details[gid][key] for key in ("incoming_kzt", "outgoing_kzt", "unique_senders", "unique_receivers")})
         max_amount = max(float(value) for value in result.edges.sum_kzt)
         self.edges = [{"id": f"{row.src}:{row.dst}", "source": str(row.src), "target": str(row.dst),
                        "sum_kzt": money(row.sum_kzt), "n_tx": int(row.n_tx),
@@ -170,13 +171,13 @@ class RunStore:
             rid = uuid.uuid4().hex[:16]
             meta = {"run_id": rid, "dataset_id": None, "status": "queued", "stage": "Подготовка снимка",
                     "started_at": datetime.now(timezone.utc).isoformat(), "version": VERSION, "seconds": None}
-            self.runs[rid] = meta
             folder = self.directory / rid
             (folder / "input").mkdir(parents=True)
             for name in ("nodes", "edges", "transactions"):
                 shutil.copyfile(self.data_dir / f"{name}.parquet", folder / "input" / f"{name}.parquet")
             shutil.copyfile(ROOT / "config.json", folder / "config.json")
             self._save(meta)
+            self.runs[rid] = meta
         if background:
             threading.Thread(target=self.execute, args=(rid,), daemon=True).start()
         else:
@@ -213,6 +214,8 @@ class RunStore:
                     [("nodes_roles.csv", result.roles), ("clusters.csv", result.clusters), ("top_nodes.csv", result.top)]],
                 checks={"all_nodes": True, "required_fields": True, "finite_scores": True, "unique_top": True,
                         "valid_clusters": True, "valid_top_gids": all(set(json.loads(x)).issubset(set(result.roles.gid.astype(str))) for x in result.clusters.top_gids)})
+            if not all(meta["checks"].values()):
+                raise ValueError("Проверка артефактов не пройдена; новый анализ не опубликован.")
             snapshot = Snapshot(result, meta, folder)
             (folder / "positions.json").write_text(json.dumps(snapshot.positions))
             # Publish only once the whole snapshot and all validated artifacts exist.

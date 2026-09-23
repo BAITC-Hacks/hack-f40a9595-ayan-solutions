@@ -14,11 +14,16 @@ const viewports = new Map<
     positions: Record<string, { x: number; y: number }>;
   }
 >();
+const runPositions = new Map<
+  string,
+  Record<string, { x: number; y: number }>
+>();
 export interface GraphSettings {
   labels: boolean;
   fixedSize: boolean;
   compact: boolean;
   reducedMotion: boolean;
+  inspectorWidth?: number;
 }
 export const defaultSettings: GraphSettings = {
   labels: false,
@@ -36,6 +41,7 @@ interface Props {
   settings: GraphSettings;
   viewKey: string;
   external?: Set<string>;
+  affected?: Set<string>;
 }
 function GraphCanvas({
   data,
@@ -47,9 +53,12 @@ function GraphCanvas({
   settings,
   viewKey,
   external,
+  affected,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  const viewportKey = useRef(viewKey);
+  const hydrated = useRef(false);
   const callbacks = useRef({ onSelect, onNeighborhood });
   callbacks.current = { onSelect, onNeighborhood };
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(
@@ -60,13 +69,18 @@ function GraphCanvas({
   useEffect(() => {
     if (!host.current) return;
     const css = getComputedStyle(host.current);
+    const token = (name: string) => css.getPropertyValue(`--gm-${name}`).trim();
     colorsRef.current = Object.fromEntries(
       Object.keys(roles).map((role) => [
         role,
         css.getPropertyValue(`--gm-role-${role}`).trim(),
       ]),
     );
-    const saved = viewports.get(data.run_id);
+    const saved = viewports.get(viewKey);
+    viewportKey.current = viewKey;
+    hydrated.current = false;
+    if (!runPositions.has(data.run_id))
+      runPositions.set(data.run_id, { ...data.positions });
     const cy = cytoscape({
       container: host.current,
       layout: { name: "preset" },
@@ -80,7 +94,8 @@ function GraphCanvas({
             label: `${n.is_seed ? "S · " : ""}${n.gid}`,
             color: colorsRef.current[n.role],
           },
-          position: saved?.positions[n.gid] || data.positions[n.gid],
+          position:
+            runPositions.get(data.run_id)?.[n.gid] || data.positions[n.gid],
         })),
         ...data.edges.map((e) => ({ data: e })),
       ],
@@ -93,8 +108,8 @@ function GraphCanvas({
             height: "mapData(priority_score, 0, 1, 10, 28)",
             label: "",
             "font-size": 11,
-            color: "#edf5fc",
-            "text-outline-color": "#08121b",
+            color: token("text"),
+            "text-outline-color": token("bg"),
             "text-outline-width": 2,
             "text-valign": "bottom",
             "text-margin-y": 7,
@@ -105,8 +120,8 @@ function GraphCanvas({
           selector: "edge",
           style: {
             width: "data(width)",
-            "line-color": "#59748a",
-            "target-arrow-color": "#7891a5",
+            "line-color": token("edge"),
+            "target-arrow-color": token("edge-arrow"),
             "target-arrow-shape": "triangle",
             "curve-style": "bezier",
             opacity: 0.42,
@@ -117,7 +132,7 @@ function GraphCanvas({
           selector: "node.chosen",
           style: {
             "border-width": 2,
-            "border-color": "#edf5fc",
+            "border-color": token("text"),
             label: "data(label)",
             "z-index": 100,
           },
@@ -125,8 +140,8 @@ function GraphCanvas({
         {
           selector: "edge.chosen",
           style: {
-            "line-color": "#7dd3fc",
-            "target-arrow-color": "#7dd3fc",
+            "line-color": token("focus"),
+            "target-arrow-color": token("focus"),
             opacity: 1,
             "z-index": 99,
           },
@@ -136,15 +151,27 @@ function GraphCanvas({
           style: {
             "border-width": 2,
             "border-style": "dashed",
-            "border-color": "#edf5fc",
+            "border-color": token("text"),
           },
         },
-        { selector: ".labelled", style: { label: "data(label)" } },
-        { selector: "node.priority-label", style: { label: "data(label)", "min-zoomed-font-size": 8 } },
+        {
+          selector: "node.labelled, node.hover-label, node.zoom-label",
+          style: { label: "data(label)" },
+        },
+        {
+          selector: "node.priority-label",
+          style: { label: "data(label)", "min-zoomed-font-size": 8 },
+        },
+        {
+          selector: "node.affected",
+          style: { "border-width": 3, "border-color": token("warning") },
+        },
       ],
     });
     cyRef.current = cy;
-    cy.nodes().filter(n => n.data("rank") <= 5).addClass("priority-label");
+    cy.nodes()
+      .filter((n) => n.data("rank") <= 5)
+      .addClass("priority-label");
     if (saved) {
       cy.zoom(saved.zoom);
       cy.pan(saved.pan);
@@ -154,6 +181,11 @@ function GraphCanvas({
       callbacks.current.onNeighborhood(e.target.id()),
     );
     cy.on("tap", "edge", (e) => callbacks.current.onSelect(e.target.id()));
+    cy.on("dragfree", "node", (e) => {
+      runPositions.get(data.run_id)![e.target.id()] = {
+        ...e.target.position(),
+      };
+    });
     cy.on("tap", (e) => {
       if (e.target === cy) callbacks.current.onSelect("");
     });
@@ -169,20 +201,32 @@ function GraphCanvas({
         y: Math.max(10, p.y - 58),
         text,
       });
-      if (el.isNode()) el.addClass("labelled");
+      if (el.isNode()) el.addClass("hover-label");
     });
     cy.on("mouseout", "node,edge", (e) => {
       setTip(null);
-      e.target.removeClass("labelled");
+      e.target.removeClass("hover-label");
     });
     const observer = new ResizeObserver(() => cy.resize());
     observer.observe(host.current);
+    let zoomTimer: ReturnType<typeof setTimeout>;
+    cy.on("zoom", () => {
+      clearTimeout(zoomTimer);
+      zoomTimer = setTimeout(
+        () =>
+          cy.batch(() => {
+            cy.nodes().toggleClass("zoom-label", cy.zoom() >= 0.9);
+          }),
+        120,
+      );
+    });
     return () => {
+      clearTimeout(zoomTimer);
       const positions: Record<string, { x: number; y: number }> = {};
       cy.nodes().forEach((n) => {
         positions[n.id()] = { ...n.position() };
       });
-      viewports.set(data.run_id, {
+      viewports.set(viewportKey.current, {
         zoom: cy.zoom(),
         pan: { ...cy.pan() },
         positions,
@@ -199,6 +243,7 @@ function GraphCanvas({
       cy.nodes().forEach((n) => {
         n.style("display", visible.has(n.id()) ? "element" : "none");
         n.toggleClass("context", Boolean(external?.has(n.id())));
+        n.toggleClass("affected", Boolean(affected?.has(n.id())));
       });
       cy.edges().forEach((e) => {
         e.style(
@@ -209,7 +254,7 @@ function GraphCanvas({
         );
       });
     });
-  }, [visible, external]);
+  }, [visible, external, affected]);
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -221,7 +266,13 @@ function GraphCanvas({
         if (el.isEdge()) el.connectedNodes().addClass("chosen");
         if (el.length && el.visible() && el.isNode()) {
           const p = el.renderedPosition();
-          if (p.x < 30 || p.x > cy.width()-30 || p.y < 30 || p.y > cy.height()-30) cy.center(el);
+          if (
+            p.x < 30 ||
+            p.x > cy.width() - 30 ||
+            p.y < 30 ||
+            p.y > cy.height() - 30
+          )
+            cy.center(el);
         }
       }
     });
@@ -247,7 +298,24 @@ function GraphCanvas({
   }, [colorBy, settings]);
   useEffect(() => {
     const cy = cyRef.current;
-    if (cy) cy.fit(cy.elements(":visible"), 40);
+    if (!cy) return;
+    if (!hydrated.current) {
+      hydrated.current = true;
+      if (!viewports.has(viewKey)) cy.fit(cy.elements(":visible"), 40);
+      return;
+    }
+    if (viewportKey.current === viewKey) return;
+    viewports.set(viewportKey.current, {
+      zoom: cy.zoom(),
+      pan: { ...cy.pan() },
+      positions: runPositions.get(data.run_id) || data.positions,
+    });
+    viewportKey.current = viewKey;
+    const saved = viewports.get(viewKey);
+    if (saved) {
+      cy.zoom(saved.zoom);
+      cy.pan(saved.pan);
+    } else cy.fit(cy.elements(":visible"), 40);
   }, [viewKey]);
   useEffect(() => {
     const listener = () => setFullscreen(Boolean(document.fullscreenElement));

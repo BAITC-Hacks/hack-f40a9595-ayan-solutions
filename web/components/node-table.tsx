@@ -1,8 +1,9 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-import { ArrowDownWideNarrow } from "lucide-react";
+import { useMemo } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { ArrowDownWideNarrow, Columns3 } from "lucide-react";
 import type { NodeSummary } from "@/lib/types";
-import { score } from "@/lib/utils";
+import { score, money } from "@/lib/utils";
 import { Gid, RoleBadge, Pagination, ExportButton } from "./common";
 export default function NodeTable({
   nodes,
@@ -19,10 +20,26 @@ export default function NodeTable({
   priority?: boolean;
   visible?: Set<string>;
 }) {
-  const [page, setPage] = useState(1);
-  const [size, setSize] = useState(25);
-  const [sort, setSort] = useState("priority");
-  const [local, setLocal] = useState(false);
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const updateTable = (patch: Record<string, string>) => {
+    const next = new URLSearchParams(window.location.search);
+    Object.entries(patch).forEach(([key, value]) => next.set(key, value));
+    window.history.replaceState(null, "", pathname + "?" + next.toString());
+  };
+  const size = [25, 50, 100].includes(Number(params.get("table_size")))
+    ? Number(params.get("table_size"))
+    : 25;
+  const sort = params.get("table_sort") || "priority";
+  const local = params.get("table_local") === "1";
+  const columns = params.get("columns") || "";
+  const setPage = (value: number) => updateTable({ table_page: String(value) });
+  const setSize = (value: number) =>
+    updateTable({ table_size: String(value), table_page: "1" });
+  const setSort = (value: string) =>
+    updateTable({ table_sort: value, table_page: "1" });
+  const setLocal = (value: boolean) =>
+    updateTable({ table_local: value ? "1" : "0", table_page: "1" });
   const rows = useMemo(
     () =>
       nodes
@@ -38,7 +55,13 @@ export default function NodeTable({
         ),
     [nodes, sort, local, visible],
   );
-  useEffect(() => setPage(1), [nodes, local, sort, size]);
+  const page = Math.max(
+    1,
+    Math.min(
+      Number(params.get("table_page")) || 1,
+      Math.ceil(rows.length / size) || 1,
+    ),
+  );
   return (
     <section className="node-table">
       <header className="table-heading">
@@ -72,6 +95,38 @@ export default function NodeTable({
           {priority && (
             <ExportButton run={run} name="top_nodes.csv" label="CSV" />
           )}
+          {!priority && (
+            <details className="column-picker">
+              <summary>
+                <Columns3 size={15} />
+                Столбцы
+              </summary>
+              <div>
+                {[
+                  ["flow", "Входящие и исходящие"],
+                  ["degree", "Число контрагентов"],
+                ].map(([key, label]) => (
+                  <label className="check-row" key={key}>
+                    <input
+                      type="checkbox"
+                      checked={columns.includes(key)}
+                      onChange={(e) =>
+                        updateTable({
+                          columns: e.target.checked
+                            ? [columns, key].filter(Boolean).join(",")
+                            : columns
+                                .split(",")
+                                .filter((k) => k !== key)
+                                .join(","),
+                        })
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
       </header>
       {priority && nodes.length < 20 && (
@@ -95,6 +150,18 @@ export default function NodeTable({
                 </>
               )}
               <th>Основание</th>
+              {!priority && columns.includes("flow") && (
+                <>
+                  <th className="numeric">Входящие</th>
+                  <th className="numeric">Исходящие</th>
+                </>
+              )}
+              {!priority && columns.includes("degree") && (
+                <>
+                  <th className="numeric">Отправители</th>
+                  <th className="numeric">Получатели</th>
+                </>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -131,6 +198,22 @@ export default function NodeTable({
                 <td className="evidence-cell" title={n.evidence}>
                   <span>{n.evidence}</span>
                 </td>
+                {!priority && columns.includes("flow") && (
+                  <>
+                    <td className="numeric">
+                      {n.incoming_kzt ? money(n.incoming_kzt) : "—"}
+                    </td>
+                    <td className="numeric">
+                      {n.outgoing_kzt ? money(n.outgoing_kzt) : "—"}
+                    </td>
+                  </>
+                )}
+                {!priority && columns.includes("degree") && (
+                  <>
+                    <td className="numeric">{n.unique_senders ?? "—"}</td>
+                    <td className="numeric">{n.unique_receivers ?? "—"}</td>
+                  </>
+                )}
               </tr>
             ))}
           </tbody>

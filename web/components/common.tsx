@@ -10,7 +10,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { roles, download, count } from "@/lib/utils";
+import { roles, download, count, ApiError } from "@/lib/utils";
 import type { RoleCode } from "@/lib/types";
 export function RoleBadge({ role }: { role: RoleCode }) {
   return (
@@ -33,7 +33,13 @@ export function Gid({
   return (
     <span className="gid-group">
       {onSelect ? (
-        <button className="gid link" onClick={() => onSelect(gid)}>
+        <button
+          className="gid link"
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect(gid);
+          }}
+        >
           {gid}
         </button>
       ) : (
@@ -116,6 +122,12 @@ export function ErrorState({
     <div className="error-state" role="alert">
       <AlertCircle size={18} />
       <span>{typeof error === "string" ? error : error.message}</span>
+      {error instanceof ApiError && error.requestId && (
+        <details>
+          <summary>Диагностика</summary>
+          <code>request_id: {error.requestId}</code>
+        </details>
+      )}
       {retry && <Button onClick={retry}>Повторить</Button>}
     </div>
   );

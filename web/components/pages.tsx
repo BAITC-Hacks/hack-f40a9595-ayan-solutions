@@ -8,6 +8,7 @@ import {
   FolderCheck,
   Play,
   ShieldAlert,
+  Copy,
 } from "lucide-react";
 import type {
   Run,
@@ -39,6 +40,50 @@ import NodeTable from "./node-table";
 import ObjectInspector from "./inspector";
 import GraphCanvas, { type GraphSettings } from "./graph-canvas";
 import { emptyFilters, visibleNodes } from "@/lib/view-state";
+
+export function SourceData() {
+  const check = useMutation({
+    mutationFn: () =>
+      api<{ valid: boolean; rows: Run["rows"] }>("/api/data/validate", {
+        method: "POST",
+      }),
+  });
+  return (
+    <div className="page-content">
+      <h1>Данные и методика</h1>
+      <section className="page-section">
+        <h2>Источник для нового анализа</h2>
+        <p>Локальная папка data/. Обязательные файлы:</p>
+        <ul>
+          <li>
+            <code>nodes.parquet</code>: gid, depth, is_seed
+          </li>
+          <li>
+            <code>edges.parquet</code>: src, dst, sum_kzt, n_tx, depth
+          </li>
+          <li>
+            <code>transactions.parquet</code>: src, dst, date, sum_kzt
+          </li>
+        </ul>
+        <Button disabled={check.isPending} onClick={() => check.mutate()}>
+          Проверить файлы
+        </Button>
+        {check.error && <ErrorState error={check.error} />}{" "}
+        {check.data && (
+          <p role="status">
+            Проверены схема, значения и согласованность: {check.data.rows.nodes}{" "}
+            узлов, {check.data.rows.edges} связей,{" "}
+            {check.data.rows.transactions} переводов.
+          </p>
+        )}
+        <p>
+          Расчёт запускается кнопкой «Пересчитать». Завершённых анализов пока
+          нет.
+        </p>
+      </section>
+    </div>
+  );
+}
 
 export function Overview({
   run,
@@ -510,7 +555,7 @@ export function ClusterPage({
             }
             colorBy="role"
             settings={settings}
-            viewKey={`cluster:${id}:${external}`}
+            viewKey={`cluster:${run.run_id}:${id}:${external}`}
             external={extras}
           />
         </div>
@@ -608,6 +653,7 @@ export function NodePage({
   navigate: (path: string) => void;
   settings: GraphSettings;
 }) {
+  const [linkNotice, setLinkNotice] = useState("");
   const visible = visibleNodes(
     graph,
     emptyFilters,
@@ -616,6 +662,14 @@ export function NodePage({
     1,
     "all",
   );
+  if (!graph.nodes.some((node) => node.gid === gid))
+    return (
+      <div className="page-content">
+        <h1>Узел не найден в этом анализе</h1>
+        <p className="gid">{gid}</p>
+        <Button onClick={() => navigate("/nodes")}>К списку узлов</Button>
+      </div>
+    );
   return (
     <div className="page-content node-page">
       <header className="page-heading">
@@ -625,13 +679,30 @@ export function NodePage({
           </button>
           <h1 className="gid">{gid}</h1>
         </div>
-        <Button
-          onClick={() =>
-            navigate(`/network?gid=${gid}&anchor=${gid}&mode=neighborhood`)
-          }
-        >
-          Показать на графе <ArrowUpRight size={15} />
-        </Button>
+        <div className="header-actions">
+          <Button
+            variant="ghost"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(window.location.href);
+                setLinkNotice("Локальная ссылка скопирована");
+              } catch {
+                setLinkNotice("Не удалось скопировать ссылку");
+              }
+            }}
+          >
+            <Copy size={15} />
+            Скопировать ссылку
+          </Button>
+          <span role="status">{linkNotice}</span>
+          <Button
+            onClick={() =>
+              navigate(`/network?gid=${gid}&anchor=${gid}&mode=neighborhood`)
+            }
+          >
+            Показать на графе <ArrowUpRight size={15} />
+          </Button>
+        </div>
       </header>
       <div className="node-page-grid">
         <section className="full-node-inspector">
@@ -639,7 +710,15 @@ export function NodePage({
             run={run.run_id!}
             selected={gid}
             clusters={clusters}
-            onSelect={(id) => navigate(id ? `/nodes/${id}` : "/nodes")}
+            onSelect={(id) =>
+              navigate(
+                !id
+                  ? "/nodes"
+                  : id.includes(":")
+                    ? `/network?edge=${id}`
+                    : `/nodes/${id}`,
+              )
+            }
             onNeighborhood={(id) =>
               navigate(`/network?gid=${id}&anchor=${id}&mode=neighborhood`)
             }
@@ -663,7 +742,7 @@ export function NodePage({
             }
             colorBy="role"
             settings={settings}
-            viewKey={`profile:${gid}`}
+            viewKey={`profile:${run.run_id}:${gid}`}
           />
         </section>
       </div>

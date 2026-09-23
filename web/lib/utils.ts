@@ -36,6 +36,16 @@ export const dateLabel = (date: string) =>
   }).format(new Date(date));
 export const clusterColor = (id: number) =>
   `hsl(${(id * 137.508 + 25) % 360} 65% 68%)`;
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status = 0,
+    public code = "offline",
+    public requestId?: string,
+  ) {
+    super(message);
+  }
+}
 export async function api<T>(url: string, options?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -43,12 +53,19 @@ export async function api<T>(url: string, options?: RequestInit): Promise<T> {
       ...options,
       headers: { "Content-Type": "application/json", ...options?.headers },
     });
-  } catch {
-    throw new Error("Нет соединения с локальным сервисом.");
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError")
+      throw error;
+    throw new ApiError("Нет соединения с локальным сервисом.");
   }
   if (!response.ok) {
     const error = await response.json().catch(() => null);
-    throw new Error(error?.message || "Нет соединения с локальным сервисом.");
+    throw new ApiError(
+      error?.message || "Нет соединения с локальным сервисом.",
+      response.status,
+      error?.code || "offline",
+      error?.request_id,
+    );
   }
   return response.json();
 }

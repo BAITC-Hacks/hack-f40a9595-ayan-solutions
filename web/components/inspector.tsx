@@ -12,6 +12,7 @@ import {
   Send,
   ChevronRight,
   Network,
+  Trash2,
 } from "lucide-react";
 import type {
   AIResponse,
@@ -22,9 +23,10 @@ import type {
   Paged,
   Transaction,
 } from "@/lib/types";
-import { api, count, money, score, dateLabel } from "@/lib/utils";
+import { api, ApiError, count, money, score, dateLabel } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { ErrorState, Gid, Loading, Pagination, RoleBadge } from "./common";
+import ImpactPanel from "./impact-panel";
 
 export function TransactionTable({
   data,
@@ -147,7 +149,11 @@ function NodeOverview({
             <li key={rule.code}>
               <span>{rule.label}</span>
               <strong>
-                {String(rule.observed)}{" "}
+                <span title={String(rule.observed)}>
+                  {typeof rule.observed === "number"
+                    ? score(rule.observed)
+                    : String(rule.observed)}
+                </span>{" "}
                 <small>
                   условие: {rule.operator} {String(rule.threshold)}
                 </small>
@@ -402,9 +408,17 @@ function NodeAI({
   const [question, setQuestion] = useState("");
   const [action, setAction] = useState("explain");
   const [asked, setAsked] = useState("");
+  const [revision, setRevision] = useState(0);
   const cache = useQueryClient();
+  const historyQuery = useQuery({
+    queryKey: ["dialogue", run, detail.gid],
+    queryFn: async () => [] as NonNullable<AIResponse["dialogue"]>[],
+    enabled: false,
+    initialData: [],
+  });
+  const history = historyQuery.data;
   const query = useQuery({
-    queryKey: ["ai-answer", run, detail.gid, action, asked],
+    queryKey: ["ai-answer", run, detail.gid, action, asked, revision],
     queryFn: () =>
       api<AIResponse>(`/api/runs/${run}/ai`, {
         method: "POST",
@@ -414,27 +428,107 @@ function NodeAI({
     retry: false,
   });
   const mutation = useMutation({
-    mutationFn: ({ type, text }: { type: string; text: string }) =>
+    mutationFn: ({
+      type,
+      text,
+      turns,
+    }: {
+      type: string;
+      text: string;
+      revision: number;
+      turns: NonNullable<AIResponse["dialogue"]>[];
+    }) =>
       api<AIResponse>(`/api/runs/${run}/ai`, {
         method: "POST",
-        body: JSON.stringify({ gid: detail.gid, action: type, question: text }),
+        body: JSON.stringify({
+          gid: detail.gid,
+          action: type,
+          question: text,
+          history: turns,
+        }),
       }),
-    onSuccess: (data, variables) =>
+    onSuccess: (data, variables) => {
       cache.setQueryData(
-        ["ai-answer", run, detail.gid, variables.type, variables.text],
+        [
+          "ai-answer",
+          run,
+          detail.gid,
+          variables.type,
+          variables.text,
+          variables.revision,
+        ],
         data,
-      ),
+      );
+      cache.setQueryData(
+        ["ai-health"],
+        data.mode === "llm" ? "connected" : "not_configured",
+      );
+      if (data.dialogue)
+        cache.setQueryData(
+          ["dialogue", run, detail.gid],
+          (previous: NonNullable<AIResponse["dialogue"]>[] = []) =>
+            [...previous, data.dialogue!].slice(-6),
+        );
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 503)
+        cache.setQueryData(["ai-health"], "unavailable");
+    },
   });
   const request = (type: string, text = "") => {
+    if (mutation.isPending) return;
+    mutation.reset();
     setAction(type);
     setAsked(text);
-    if (!cache.getQueryData(["ai-answer", run, detail.gid, type, text]))
-      mutation.mutate({ type, text });
+    const nextRevision = type === "question" ? Date.now() : 0;
+    setRevision(nextRevision);
+    if (
+      !cache.getQueryData([
+        "ai-answer",
+        run,
+        detail.gid,
+        type,
+        text,
+        nextRevision,
+      ])
+    )
+      mutation.mutate({
+        type,
+        text,
+        revision: nextRevision,
+        turns: type === "question" ? history : [],
+      });
   };
   const answer = query.data;
   return (
     <div className="inspector-content">
       <p>AI анализирует рассчитанные признаки и связи выбранного узла.</p>
+      {history.length > 0 && (
+        <details className="ai-history">
+          <summary>История диалога · {history.length}</summary>
+          {history.map((turn, i) => (
+            <section key={i}>
+              <h3>{turn.question}</h3>
+              <p>{turn.answer.answer}</p>
+            </section>
+          ))}
+          <Button
+            size="sm"
+            disabled={mutation.isPending}
+            onClick={() => {
+              cache.setQueryData(["dialogue", run, detail.gid], []);
+              cache.removeQueries({ queryKey: ["ai-answer", run, detail.gid] });
+              setAction("cleared");
+              setAsked("");
+              setQuestion("");
+              mutation.reset();
+            }}
+          >
+            <Trash2 size={14} />
+            Очистить диалог
+          </Button>
+        </details>
+      )}
       <div className="ai-actions">
         {[
           ["explain", "Объяснить роль"],
@@ -481,7 +575,14 @@ function NodeAI({
       {mutation.error && (
         <ErrorState
           error={mutation.error}
-          retry={() => mutation.mutate({ type: action, text: asked })}
+          retry={() =>
+            mutation.mutate({
+              type: action,
+              text: asked,
+              revision,
+              turns: action === "question" ? history : [],
+            })
+          }
         />
       )}
       <section>
@@ -722,6 +823,12 @@ export default function ObjectInspector({
                 Полная карточка <ArrowUpRight size={14} />
               </button>
             </div>
+            <ImpactPanel
+              key={`${run}:${selected}`}
+              run={run}
+              gid={selected}
+              onSelect={onSelect}
+            />
             {hidden && (
               <div className="notice">
                 Узел скрыт текущими фильтрами.

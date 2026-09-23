@@ -131,3 +131,41 @@ def test_mutations_reject_foreign_origin_and_artifact_traversal(client, run_stor
     response = client.get(prefix(run_store) + "/artifacts/secrets.env")
     assert response.status_code == 404
     assert set(response.json()) == {"code", "message", "retryable", "request_id"}
+
+
+def test_impact_preserves_original_run_and_all_artifacts(client, run_store):
+    base = prefix(run_store)
+    before = client.get(base + "/graph").content
+    artifacts = {name: client.get(base + "/artifacts/" + name).content
+                 for name in ("nodes_roles.csv", "clusters.csv", "top_nodes.csv")}
+    gid = client.get(base + "/nodes?top=true").json()["items"][0]["gid"]
+    response = client.post(base + "/impact", json={"gid": gid})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["before_nodes"] - result["after_nodes"] == 1
+    assert result["after_pairs"] <= result["before_pairs"]
+    assert gid not in result["sources"] and gid not in result["lost_target_gids"]
+    assert client.get(base + "/graph").content == before
+    assert all(client.get(base + "/artifacts/" + name).content == data for name, data in artifacts.items())
+    assert client.post(base + "/impact", json={"gid": "999"}).status_code == 404
+
+
+def test_ai_history_forwarded_bounded_and_part_of_cache(client, run_store, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-not-a-real-key")
+    api.ai_cache.clear()
+    received = []
+    def answer(context, question, history):
+        received.append(history)
+        return {"answer": "Интерпретация требует проверки.", "limitations": [], "related_gids": [], "evidence_refs": ["role"]}
+    monkeypatch.setattr(api, "model_answer", answer)
+    gid = client.get(prefix(run_store) + "/nodes?top=true").json()["items"][0]["gid"]
+    body = {"gid": gid, "action": "question", "question": "Какие ограничения есть у роли?"}
+    first = client.post(prefix(run_store) + "/ai", json=body).json()
+    assert first["mode"] == "llm" and received == [[]]
+    body["history"] = [first["dialogue"]]
+    second = client.post(prefix(run_store) + "/ai", json=body).json()
+    assert not second["cached"] and received[-1] == body["history"]
+    assert client.post(prefix(run_store) + "/ai", json=body).json()["cached"]
+    assert len(received) == 2
+    body["history"] *= 7
+    assert client.post(prefix(run_store) + "/ai", json=body).status_code == 422

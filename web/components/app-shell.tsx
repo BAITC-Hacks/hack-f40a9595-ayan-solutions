@@ -36,6 +36,7 @@ import {
 import type { GraphData, Run, Cluster, RoleCode } from "@/lib/types";
 import {
   api,
+  ApiError,
   compactMoney,
   count,
   dateLabel,
@@ -78,6 +79,7 @@ import {
   NodePage,
   Overview,
   Reports,
+  SourceData,
 } from "./pages";
 
 const nav = [
@@ -102,6 +104,14 @@ function GlobalSearch({
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [index, setIndex] = useState(0);
+  const [shortcut, setShortcut] = useState("Ctrl K");
+  useEffect(
+    () =>
+      setShortcut(
+        /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘ K" : "Ctrl K",
+      ),
+    [],
+  );
   const input = useRef<HTMLInputElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const results = useMemo(() => {
@@ -196,7 +206,7 @@ function GlobalSearch({
           }
         }}
       />
-      <kbd>⌘ K</kbd>
+      <kbd>{shortcut}</kbd>
       {open && q && (
         <div className="search-results" id="search-results" role="listbox">
           {results.length ? (
@@ -286,6 +296,12 @@ function Workspace() {
   const pathname = usePathname();
   const params = useSearchParams();
   const queryClient = useQueryClient();
+  const aiHealth = useQuery({
+    queryKey: ["ai-health"],
+    queryFn: async () => "",
+    enabled: false,
+    initialData: "",
+  });
   const serialized = params.toString();
   const [settings, setSettings] = useState<GraphSettings>(defaultSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -312,7 +328,7 @@ function Workspace() {
     queryFn: ({ signal }) => api<Run>(`/api/runs/${rid}`, { signal }),
     enabled: Boolean(rid),
   });
-  const run = meta.data;
+  const run = meta.data?.status === "completed" ? meta.data : undefined;
   const graph = useQuery({
     queryKey: ["graph", rid],
     queryFn: ({ signal }) =>
@@ -345,7 +361,7 @@ function Workspace() {
   );
   const update = useCallback(
     (patch: Record<string, string | null>, replace = false) => {
-      const next = new URLSearchParams(serialized);
+      const next = new URLSearchParams(window.location.search);
       if (rid) next.set("run", rid);
       Object.entries(patch).forEach(([key, value]) => {
         if (value === null || value === "") next.delete(key);
@@ -353,8 +369,8 @@ function Workspace() {
       });
       const target =
         (pathname === "/" ? "/network" : pathname) + "?" + next.toString();
-      if (replace) router.replace(target, { scroll: false });
-      else router.push(target, { scroll: false });
+      if (replace) window.history.replaceState(null, "", target);
+      else window.history.pushState(null, "", target);
     },
     [serialized, rid, pathname, router],
   );
@@ -371,7 +387,9 @@ function Workspace() {
         }),
       ]);
       if (metadata.status === "completed") {
-        await queryClient.invalidateQueries({queryKey: ["current"]});
+        queryClient.removeQueries({ queryKey: ["dialogue"] });
+        queryClient.removeQueries({ queryKey: ["ai-answer"] });
+        await queryClient.invalidateQueries({ queryKey: ["current"] });
         router.push(`/network?run=${newRun}`);
         setPending("");
         setRunError("");
@@ -419,7 +437,8 @@ function Workspace() {
     setSettingsNotice("Настройки вида сохранены");
   };
   const setFilters = (f: Filters) => {
-    const next = new URLSearchParams(serialized);
+    const next = new URLSearchParams(window.location.search);
+    next.delete("table_page");
     ["role", "cluster", "depth", "priority", "seed", "boundary"].forEach((k) =>
       next.delete(k),
     );
@@ -430,7 +449,7 @@ function Workspace() {
     if (f.seed) next.set("seed", "1");
     if (f.boundary) next.set("boundary", "1");
     if (rid) next.set("run", rid);
-    router.push(pathname + "?" + next.toString(), { scroll: false });
+    window.history.pushState(null, "", pathname + "?" + next.toString());
   };
   const selected = params.get("edge") || params.get("gid") || "";
   const mode = params.get("mode") || "all";
@@ -555,7 +574,10 @@ function Workspace() {
       </div>
     </>
   );
-  const offline = current.error || meta.error || graph.error || clusters.error;
+  const offline = [current.error, meta.error, graph.error, clusters.error].find(
+    (error) =>
+      error instanceof ApiError && (error.status === 0 || error.status >= 500),
+  );
   return (
     <div
       className={`app-shell ${settings.compact ? "density-compact" : ""} ${settings.reducedMotion ? "reduced-motion" : ""}`}
@@ -653,12 +675,23 @@ function Workspace() {
                 />
               </div>
             )}
-            {runError && <ErrorState error={runError} />}{" "}
+            {runError && (
+              <ErrorState
+                error={runError}
+                retry={
+                  pending
+                    ? () =>
+                        void switchRun(pending).catch((error) =>
+                          setRunError(error.message),
+                        )
+                    : undefined
+                }
+              />
+            )}{" "}
             {pending && (
               <div className="notice" role="status">
                 <LoaderCircle size={15} className="spin" />
-                {poll.data?.stage || "Запуск расчёта"} · Показаны результаты
-                предыдущего анализа.
+                {poll.data?.stage || "Запуск расчёта"} · {run ? "Показаны результаты предыдущего анализа." : "Создаётся первый анализ."}
               </div>
             )}
           </div>
@@ -670,6 +703,8 @@ function Workspace() {
                 error={current.error}
                 retry={() => current.refetch()}
               />
+            ) : route === "methodology" ? (
+              <SourceData />
             ) : (
               <div className="initial-state">
                 <Database size={40} />
@@ -685,19 +720,39 @@ function Workspace() {
                   Источник: локальная папка data/. Нужны nodes.parquet,
                   edges.parquet и transactions.parquet.
                 </p>
-                <a href="/api/docs" target="_blank" rel="noreferrer">
-                  Проверка данных через локальный API
-                </a>
+                <button
+                  className="link"
+                  onClick={() => navigate("/methodology")}
+                >
+                  Данные и проверка файлов
+                </button>
               </div>
             )
           ) : !run || !graph.data ? (
             meta.error || graph.error ? (
               <ErrorState error={(meta.error || graph.error)!} />
+            ) : meta.data && meta.data.status !== "completed" ? (
+              <ErrorState
+                error={
+                  meta.data.error ||
+                  meta.data.stage ||
+                  "Анализ ещё не завершён."
+                }
+              />
             ) : (
               <Loading />
             )
           ) : route === "network" ? (
-            <div className="network-workspace">
+            <div
+              className="network-workspace"
+              style={
+                !compactViewport && settings.inspectorWidth
+                  ? {
+                      gridTemplateColumns: `minmax(0,1fr) ${settings.inspectorWidth}px`,
+                    }
+                  : undefined
+              }
+            >
               <div className="network-center">
                 <Metrics run={run} />
                 <div className="split-area" key={panelVersion}>
@@ -1011,9 +1066,13 @@ function Workspace() {
           <Database size={12} /> Обезличенный набор; анализ выполняется локально
         </span>
         <span>
-          {run?.ai_status === "configured"
-            ? "AI настроен · внешний сервис"
-            : "AI не настроен"}
+          {aiHealth.data === "unavailable"
+            ? "AI временно недоступен"
+            : aiHealth.data === "connected"
+              ? "AI подключён · внешний сервис"
+              : run?.ai_status === "configured"
+                ? "AI настроен · внешний сервис"
+                : "AI не настроен"}
           <i />{" "}
           {run ? `${run.version} · ${run.seconds} с` : "Нет активного анализа"}
         </span>
@@ -1025,6 +1084,20 @@ function Workspace() {
         <DialogContent>
           <DialogTitle>Настройки вида</DialogTitle>
           <DialogDescription>Локальные параметры отображения</DialogDescription>
+          <label className="settings-width">
+            Ширина инспектора: {settings.inspectorWidth || 336} px
+            <input
+              aria-label="Ширина инспектора"
+              type="range"
+              min="336"
+              max="480"
+              step="8"
+              value={settings.inspectorWidth || 336}
+              onChange={(event) =>
+                changeSettings({ inspectorWidth: Number(event.target.value) })
+              }
+            />
+          </label>
           {[
             ["compact", "Компактная таблица"],
             ["labels", "Подписи узлов"],
@@ -1034,7 +1107,7 @@ function Workspace() {
             <label className="check-row settings-check" key={key}>
               <input
                 type="checkbox"
-                checked={settings[key as keyof GraphSettings]}
+                checked={Boolean(settings[key as keyof GraphSettings])}
                 onChange={(e) => changeSettings({ [key]: e.target.checked })}
               />
               {label}
