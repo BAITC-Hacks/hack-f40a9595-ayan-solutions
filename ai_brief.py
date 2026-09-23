@@ -117,6 +117,10 @@ def model_brief(context, api_key=None, model=None):
         "text": {"format": {"type": "json_schema", "name": "analyst_brief", "strict": True, "schema": schema}},
         "store": False,
     }
+    return validate_brief(request_structured(payload, api_key), context)
+
+
+def request_structured(payload, api_key):
     response = requests.post(
         "https://api.openai.com/v1/responses",
         json=payload,
@@ -132,5 +136,5 @@ def model_brief(context, api_key=None, model=None):
             continue
         for part in item.get("content", []):
             if part.get("type") == "output_text":
-                return validate_brief(json.loads(part["text"]), context)
+                return json.loads(part["text"])
     raise ValueError("Model response contained no structured text")

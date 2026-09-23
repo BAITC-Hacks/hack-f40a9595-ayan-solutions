@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from analysis import run_pipeline
 from ai_brief import local_brief, model_brief, node_context
+from ai_chat import FACT_LABELS, MAX_CHAT_TURNS, MAX_QUESTION_CHARS, chat_context, model_answer
 from graph_view import ROLE_COLORS, render_neighborhood
 from temporal import daily_activity, temporal_summary
 
@@ -87,6 +88,7 @@ first_date = result.transactions.date.min().date()
 last_date = result.transactions.date.max().date()
 period = str(first_date) if first_date == last_date else f"{first_date} — {last_date}"
 period_caption.caption(f"Внутрибанковские переводы · {period} · аналитические гипотезы для проверки")
+analysis_key = (source, tuple(sorted(result.manifest["sha256"].items())), tuple(sorted(result.manifest["config"].items())))
 
 metrics = st.columns(4)
 metrics[0].metric("Клиенты", f"{len(result.roles):,}".replace(",", " "))
@@ -149,7 +151,7 @@ with left:
         st.info("Для seed входящие суммы из-за способа сбора данных могут быть занижены.")
     st.subheader("Справка аналитика")
     context = node_context(result, gid)
-    current_key = ("daily-v1", tuple(result.manifest["sha256"].values()), gid, context["active_days"], context["same_day_both"])
+    current_key = ("daily-v1", analysis_key, gid, context["active_days"], context["same_day_both"])
     if st.session_state.get("brief_key") != current_key:
         st.session_state.brief = local_brief(context)
         st.session_state.brief_mode = "Правиловая справка"
@@ -202,6 +204,68 @@ with right:
         st.caption(" · ".join(f"{name}: {color}" for name, color in ROLE_COLORS.items()))
     st.subheader("Кластеры")
     st.dataframe(result.clusters[["cluster_id", "n_nodes", "n_seed", "sum_kzt_internal", "hypothesis"]], hide_index=True, use_container_width=True, height=210)
+
+st.divider()
+with st.container():
+    if st.session_state.get("chat_dataset_key") != analysis_key:
+        st.session_state.node_chats = {}
+        st.session_state.chat_dataset_key = analysis_key
+    chat = st.session_state.node_chats.setdefault(gid, {"turns": [], "pending": None})
+    chat_id = hashlib.sha256(repr((analysis_key, gid)).encode()).hexdigest()[:16]
+    chat_header, chat_actions = st.columns([12, 1])
+    chat_header.subheader("Вопросы по клиенту")
+    chat_header.caption(f"GID {gid} · {role.role}")
+    if chat_actions.button("", icon=":material/delete:", help="Очистить диалог", key="clear_chat"):
+        chat = {"turns": [], "pending": None}
+        st.session_state.node_chats[gid] = chat
+    question_context = chat_context(result, gid)
+    api_available = bool(os.getenv("OPENAI_API_KEY"))
+    retry = False
+    with st.container(**({"height": 380, "border": False} if chat["turns"] or chat["pending"] else {})):
+        for turn in chat["turns"]:
+            with st.chat_message("user"):
+                st.write(turn["question"])
+            with st.chat_message("assistant"):
+                answer = turn["answer"]
+                st.write(answer["answer"])
+                st.caption("AI-интерпретация: роль является гипотезой, а не установленным фактом. Основания из расчёта:")
+                for ref in answer["evidence_refs"]:
+                    value = question_context["facts"][ref]
+                    if value is None:
+                        value = "не определяется"
+                    elif isinstance(value, bool):
+                        value = "да" if value else "нет"
+                    elif isinstance(value, float):
+                        value = f"{value:,.2f}".replace(",", " ") if ref in ("in_kzt", "out_kzt") else f"{value:.6g}"
+                    st.caption(f"{FACT_LABELS[ref]}: {value}")
+                for neighbor in question_context["neighbors"]:
+                    if neighbor["gid"] in answer["related_gids"]:
+                        st.caption(f"GID {neighbor['gid']} · {neighbor['role']} · "
+                                   f"перевёл выбранному: {neighbor['to_selected_kzt']:,.2f} KZT · "
+                                   f"получил от выбранного: {neighbor['from_selected_kzt']:,.2f} KZT")
+                if answer["limitations"]:
+                    st.caption("Ограничения: " + " ".join(answer["limitations"]))
+        if chat["pending"]:
+            with st.chat_message("user"):
+                st.write(chat["pending"])
+            st.error("Не удалось получить проверенный ответ. Вопрос сохранён.")
+            retry = st.button("Повторить", icon=":material/refresh:", key="retry_chat", disabled=not api_available)
+    if not api_available:
+        st.caption("AI недоступен: ключ не настроен.")
+    submitted = st.chat_input("Уточняющий вопрос по клиенту", max_chars=MAX_QUESTION_CHARS,
+                              key=f"question_{chat_id}", disabled=not api_available)
+    question = submitted.strip() if submitted else chat["pending"] if retry else None
+    if question:
+        try:
+            with st.spinner("Готовим ответ по данным клиента…"):
+                answer = model_answer(question_context, question, history=chat["turns"], brief=brief)
+        except Exception:
+            chat["pending"] = question
+        else:
+            chat["turns"].append({"question": question, "answer": answer})
+            chat["turns"] = chat["turns"][-MAX_CHAT_TURNS:]
+            chat["pending"] = None
+        st.rerun()
 
 st.divider()
 st.subheader("Выгрузки")
