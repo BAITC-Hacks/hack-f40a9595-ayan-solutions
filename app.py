@@ -1,6 +1,7 @@
 """Local analyst interface for the reproducible graph pipeline."""
 
 from pathlib import Path
+import hashlib
 import tempfile
 import os
 
@@ -14,6 +15,7 @@ from temporal import daily_activity, temporal_summary
 
 
 ROOT = Path(__file__).parent
+INPUT_NAMES = ("nodes", "edges", "transactions")
 st.set_page_config(page_title="Граф денег", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""<style>
     .block-container { padding-top: 1.35rem; max-width: 1500px; }
@@ -28,13 +30,26 @@ with st.sidebar:
     source = st.radio("Источник", ["Предоставленный набор", "Загрузить parquet"], label_visibility="collapsed")
     uploads = {}
     if source == "Загрузить parquet":
-        for name in ("nodes", "edges", "transactions"):
+        for name in INPUT_NAMES:
             uploads[name] = st.file_uploader(f"{name}.parquet", type="parquet", key=name)
     run = st.button("Рассчитать", type="primary", use_container_width=True)
     st.caption("Полный расчёт выполняется локально. Роль и приоритет — гипотезы, не вывод о виновности.")
 
+if source == "Предоставленный набор":
+    input_paths = {name: ROOT / "data" / f"{name}.parquet" for name in INPUT_NAMES}
+    current_hashes = (
+        {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in input_paths.items()}
+        if all(path.is_file() for path in input_paths.values()) else None
+    )
+else:
+    input_bytes = {name: upload.getvalue() for name, upload in uploads.items() if upload is not None}
+    current_hashes = (
+        {name: hashlib.sha256(data).hexdigest() for name, data in input_bytes.items()}
+        if len(input_bytes) == len(INPUT_NAMES) else None
+    )
+
 if run:
-    if source == "Загрузить parquet" and not all(uploads.values()):
+    if source == "Загрузить parquet" and current_hashes is None:
         st.error("Загрузите все три parquet-файла.")
         st.session_state.pop("result", None)
     else:
@@ -46,11 +61,13 @@ if run:
                 else:
                     with tempfile.TemporaryDirectory() as temporary:
                         folder = Path(temporary)
-                        for name, upload in uploads.items():
-                            (folder / f"{name}.parquet").write_bytes(upload.getvalue())
-                        result = run_pipeline(folder, ROOT / "out")
+                        for name, data in input_bytes.items():
+                            (folder / f"{name}.parquet").write_bytes(data)
+                        result = run_pipeline(folder, folder / "out")
                 st.session_state.result = result
                 st.session_state.result_source = source
+                st.session_state.gid_query = str(int(result.top.iloc[0].gid))
+                st.session_state.last_top_selection = None
         except Exception as exc:
             st.error(f"Расчёт не выполнен: {exc}")
 
@@ -59,8 +76,8 @@ if "result" not in st.session_state:
     st.stop()
 
 result = st.session_state.result
-if st.session_state.result_source != source:
-    st.warning("Источник изменён. Нажмите «Рассчитать», чтобы увидеть результаты новых данных.")
+if st.session_state.result_source != source or current_hashes != result.manifest["sha256"]:
+    st.warning("Входные файлы изменились. Нажмите «Рассчитать», чтобы увидеть результаты новых данных.")
     st.stop()
 
 metrics = st.columns(4)
@@ -76,7 +93,8 @@ with left:
     shown_top["gid"] = shown_top.gid.astype(str)
     selection = st.dataframe(
         shown_top, hide_index=True, use_container_width=True, height=365,
-        on_select="rerun", selection_mode="single-row", key="top_selection",
+        on_select="rerun", selection_mode="single-row",
+        key="top_selection_" + "_".join(value[:12] for value in result.manifest["sha256"].values()),
         column_config={
             "rank": st.column_config.NumberColumn("#", width="small"),
             "gid": st.column_config.TextColumn("GID", width="medium"),
@@ -91,7 +109,9 @@ with left:
     st.session_state.last_top_selection = selected_key
     st.subheader("Найти клиента")
     default_gid = str(int(result.top.iloc[0].gid))
-    query = st.text_input("GID", value=default_gid, key="gid_query", help="Введите синтетический идентификатор клиента")
+    if "gid_query" not in st.session_state:
+        st.session_state.gid_query = default_gid
+    query = st.text_input("GID", key="gid_query", help="Введите синтетический идентификатор клиента")
     try:
         gid = int(query.strip())
     except ValueError:

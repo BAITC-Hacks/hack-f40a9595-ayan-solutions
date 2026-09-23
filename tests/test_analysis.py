@@ -61,3 +61,20 @@ def test_mismatched_transaction_amount_rejected(tmp_path):
         frame.to_parquet(tmp_path / f"{name}.parquet")
     with pytest.raises(ValueError, match="disagree"):
         load_data(tmp_path)
+
+
+def test_missing_file_does_not_create_exports(tmp_path):
+    with pytest.raises(ValueError, match="Missing input file: nodes.parquet"):
+        run_pipeline(tmp_path / "inputs", tmp_path / "exports")
+    assert not (tmp_path / "exports").exists()
+
+
+def test_missing_required_column_rejected(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    for name in ("nodes", "edges", "transactions"):
+        frame = pd.read_parquet(root / "data" / f"{name}.parquet")
+        if name == "edges":
+            frame = frame.drop(columns="n_tx")
+        frame.to_parquet(tmp_path / f"{name}.parquet")
+    with pytest.raises(ValueError, match="edges.parquet lacks columns: n_tx"):
+        load_data(tmp_path)
