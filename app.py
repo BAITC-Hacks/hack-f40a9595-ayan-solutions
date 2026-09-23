@@ -157,6 +157,14 @@ with left:
     brief = st.session_state.brief
     st.caption(st.session_state.brief_mode)
     st.write(brief["summary"])
+    evidence_labels = {
+        "in_degree": "плательщики", "out_degree": "получатели",
+        "in_kzt": "входящая сумма", "out_kzt": "исходящая сумма",
+        "seed_reach": "достижимость от seed", "cluster_id": "кластер",
+        "depth": "колено", "role": "роль", "priority_score": "приоритет",
+        "active_days": "активные дни", "same_day_both": "совпадение входа и выхода по дню",
+    }
+    st.caption("Основания: " + " · ".join(evidence_labels[key] for key in brief["evidence_refs"]))
     st.write("Следующий запрос: " + " ".join(brief["next_checks"]))
     if brief["related_gids"]:
         st.caption("Связанные GID: " + ", ".join(brief["related_gids"]))
