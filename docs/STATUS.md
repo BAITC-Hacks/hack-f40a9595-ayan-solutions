@@ -2,8 +2,8 @@
 
 Started: 2026-09-23 13:43 Asia/Almaty. Deadline corrected by user: 18:00 Asia/Almaty.
 
-Current step: final Git synchronization and demo handoff.
+Current step: temporal signals and top-list selection verified; preparing Git sync.
 
-Verified: milestones 230e55c and e81d372 committed. CLI produced 2248 roles, 91 clusters and top-50. Browser displayed selected, isolated and depth-4 clients with their correct explanations. Fresh archive and fresh venv: CLI completed in 5.864 s and all five tests passed in 22.87 s. No OPENAI_API_KEY is configured; only the labeled rules-based brief is verified. Ollama has no local models.
+Verified: CLI produced 2248 roles, 91 clusters and top-50. Clean install and run passed before this stage. This stage added daily in/out evidence and top-list selection; browser selection opened a second client, showed 2 overlapping days from 6 active days, and rendered the daily chart. Seven tests passed; compulsory CSVs remained unchanged. No OPENAI_API_KEY is configured; only the labeled rules-based brief is verified. Ollama has no local models.
 
-Next: commit this verification record, synchronize with origin, and leave the local app running for demonstration.
+Next: commit and push this stage, then verify the resulting Git state and continue demo reliability checks before 18:00.

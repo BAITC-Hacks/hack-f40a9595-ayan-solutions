@@ -10,6 +10,7 @@ import streamlit as st
 from analysis import run_pipeline
 from ai_brief import local_brief, model_brief, node_context
 from graph_view import ROLE_COLORS, render_neighborhood
+from temporal import daily_activity, temporal_summary
 
 
 ROOT = Path(__file__).parent
@@ -71,7 +72,23 @@ metrics[3].metric("Время расчёта", f"{result.manifest['seconds']:.1f
 left, right = st.columns([1.15, 1.45], gap="large")
 with left:
     st.subheader("Приоритет проверки")
-    st.dataframe(result.top[["rank", "gid", "role", "priority_score"]], hide_index=True, use_container_width=True, height=365)
+    shown_top = result.top[["rank", "gid", "role", "priority_score"]].copy()
+    shown_top["gid"] = shown_top.gid.astype(str)
+    selection = st.dataframe(
+        shown_top, hide_index=True, use_container_width=True, height=365,
+        on_select="rerun", selection_mode="single-row", key="top_selection",
+        column_config={
+            "rank": st.column_config.NumberColumn("#", width="small"),
+            "gid": st.column_config.TextColumn("GID", width="medium"),
+            "role": st.column_config.TextColumn("Роль", width="small"),
+            "priority_score": st.column_config.NumberColumn("Приоритет", width="small", format="%.3f"),
+        },
+    )
+    selected_rows = selection.selection.rows
+    selected_key = (tuple(result.manifest["sha256"].values()), selected_rows[0]) if selected_rows else None
+    if selected_key is not None and st.session_state.get("last_top_selection") != selected_key:
+        st.session_state.gid_query = str(int(result.top.iloc[selected_rows[0]].gid))
+    st.session_state.last_top_selection = selected_key
     st.subheader("Найти клиента")
     default_gid = str(int(result.top.iloc[0].gid))
     query = st.text_input("GID", value=default_gid, key="gid_query", help="Введите синтетический идентификатор клиента")
@@ -93,13 +110,18 @@ with left:
     st.caption(f"Кластер {int(role.cluster_id)} · глубина {int(feat.depth)} · seed: {'да' if feat.is_seed else 'нет'}")
     st.write(f"Вход: {int(feat.in_deg)} плательщиков, {int(feat.in_tx)} переводов, {feat.in_kzt:,.0f} KZT")
     st.write(f"Выход: {int(feat.out_deg)} получателей, {int(feat.out_tx)} переводов, {feat.out_kzt:,.0f} KZT")
+    daily = daily_activity(result.transactions, gid)
+    timing = temporal_summary(daily)
+    st.write(f"Дни с входом и выходом: {timing['same_day_both']} из {timing['active_days']} активных")
+    if timing["same_day_both"]:
+        st.caption("Совпадение по дню — сигнал для проверки; порядок и связь отдельных переводов неизвестны.")
     if feat.truncated_by_depth:
         st.warning("Четвёртое колено: дальнейшие исходящие переводы не наблюдаются.")
     elif feat.is_seed:
         st.info("Для seed входящие суммы из-за способа сбора данных могут быть занижены.")
     st.subheader("Справка аналитика")
     context = node_context(result, gid)
-    current_key = (tuple(result.manifest["sha256"].values()), gid)
+    current_key = ("daily-v1", tuple(result.manifest["sha256"].values()), gid, context["active_days"], context["same_day_both"])
     if st.session_state.get("brief_key") != current_key:
         st.session_state.brief = local_brief(context)
         st.session_state.brief_mode = "Правиловая справка"
@@ -119,6 +141,12 @@ with left:
     if brief["related_gids"]:
         st.caption("Связанные GID: " + ", ".join(brief["related_gids"]))
     st.caption("Ограничение: " + " ".join(brief["limitations"]))
+    with st.expander("Активность по дням"):
+        if daily.empty:
+            st.write("Переводов в наблюдаемом наборе нет.")
+        else:
+            st.bar_chart(daily[["in_kzt", "out_kzt"]].rename(columns={"in_kzt": "Вход, KZT", "out_kzt": "Выход, KZT"}), height=230)
+            st.caption(f"Максимум за день: вход {timing['max_daily_in_kzt']:,.0f} KZT, выход {timing['max_daily_out_kzt']:,.0f} KZT.")
     with st.expander("Контрагенты и суммы"):
         incoming = result.edges[result.edges.dst.eq(gid)][["src", "sum_kzt", "n_tx"]].sort_values("sum_kzt", ascending=False)
         outgoing = result.edges[result.edges.src.eq(gid)][["dst", "sum_kzt", "n_tx"]].sort_values("sum_kzt", ascending=False)

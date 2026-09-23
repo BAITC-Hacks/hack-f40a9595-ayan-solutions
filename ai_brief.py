@@ -6,12 +6,15 @@ import re
 
 import requests
 
+from temporal import daily_activity, temporal_summary
+
 
 PROMPT = (
     "You assist a bank AML analyst. Use only the supplied anonymous transfer-graph facts. "
     "Write in Russian. This is a hypothesis for review, never an accusation. "
     "Do not invent identities, transfers, amounts, dates, or other facts. "
     "Keep numbers out of prose; the application displays verified numbers separately. "
+    "Daily overlap does not prove the order or identity of transferred funds. "
     "Cite only evidence_refs and related_gids available in the context. "
     "Suggest one or two concrete next checks for missing information."
 )
@@ -38,6 +41,7 @@ def node_context(result, gid):
     related = []
     if neighbor_roles is not None:
         related = [str(value) for value in neighbor_roles.sort_values("priority_score", ascending=False).head(10).index]
+    timing = temporal_summary(daily_activity(result.transactions, gid))
     return {
         "gid": str(gid), "role": role.role, "evidence": role.evidence,
         "priority_score": float(role.priority_score), "role_score": float(role.role_score),
@@ -47,6 +51,8 @@ def node_context(result, gid):
         "depth": int(feature.depth), "is_seed": bool(feature.is_seed),
         "truncated_by_depth": bool(feature.truncated_by_depth),
         "related_gids": related,
+        "active_days": timing["active_days"],
+        "same_day_both": timing["same_day_both"],
     }
 
 
@@ -60,9 +66,11 @@ def local_brief(context):
     else:
         next_check = "Проверить полную историю входящих и исходящих операций и контрагентов."
         limitation = "Видны только внутрибанковские переводы выше порога."
+    overlap = context.get("same_day_both", 0)
+    timing_note = f" В {overlap} дн. наблюдаются вход и выход; порядок операций неизвестен." if overlap else ""
     return {
-        "summary": f"{context['evidence']} Роль является гипотезой для проверки.",
-        "evidence_refs": ["in_degree", "out_degree", "in_kzt", "out_kzt"],
+        "summary": f"{context['evidence']}{timing_note} Роль является гипотезой для проверки.",
+        "evidence_refs": ["in_degree", "out_degree", "in_kzt", "out_kzt"] + (["same_day_both"] if overlap else []),
         "related_gids": context["related_gids"][:5],
         "limitations": [limitation],
         "next_checks": [next_check],
@@ -79,7 +87,7 @@ def validate_brief(brief, context):
             raise ValueError(f"Model {key} is invalid")
     if set(brief["related_gids"]) - set(context["related_gids"]):
         raise ValueError("Model cited a gid absent from context")
-    allowed = {"in_degree", "out_degree", "in_kzt", "out_kzt", "seed_reach", "cluster_id", "depth", "role", "priority_score"}
+    allowed = {"in_degree", "out_degree", "in_kzt", "out_kzt", "seed_reach", "cluster_id", "depth", "role", "priority_score", "active_days", "same_day_both"}
     if set(brief["evidence_refs"]) - allowed or not brief["evidence_refs"]:
         raise ValueError("Model cited unsupported evidence")
     if re.search(r"\d", " ".join([brief["summary"], *brief["limitations"], *brief["next_checks"]])):
