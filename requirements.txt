@@ -1,0 +1,9 @@
+pandas>=2.2,<3
+numpy>=1.26,<3
+pyarrow>=17,<26
+networkx>=3.4,<4
+scipy>=1.14,<2
+streamlit>=1.39,<2
+pyvis>=0.3.2,<1
+pytest>=8,<10
+requests>=2.32,<3

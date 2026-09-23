@@ -1,0 +1,11 @@
+{
+  "coordinator_seed_reach": 3,
+  "coordinator_betweenness_percentile": 0.9,
+  "coordinator_other_clusters": 2,
+  "distributor_out_degree": 10,
+  "consolidator_in_degree": 3,
+  "transit_ratio_min": 0.8,
+  "transit_ratio_max": 1.2,
+  "betweenness_sample": 128,
+  "random_seed": 42
+}
