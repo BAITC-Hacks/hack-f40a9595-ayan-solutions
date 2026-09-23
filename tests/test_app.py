@@ -1,6 +1,8 @@
 import hashlib
+from io import BytesIO
 from pathlib import Path
 
+import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 
@@ -47,3 +49,21 @@ def test_upload_validation_and_export_isolation():
         name: hashlib.sha256((ROOT / "out" / name).read_bytes()).hexdigest()
         for name in EXPORT_NAMES
     } == exports_before
+
+
+def test_uploaded_period_caption_uses_transaction_dates():
+    app = AppTest.from_file(ROOT / "app.py", default_timeout=15).run()
+    app.radio[0].set_value("Загрузить parquet").run()
+    for index, name in enumerate(INPUT_NAMES):
+        frame = pd.read_parquet(ROOT / "data" / f"{name}.parquet")
+        if name == "transactions":
+            frame["date"] = (pd.to_datetime(frame.date) + pd.DateOffset(months=1)).dt.strftime("%Y-%m-%d")
+        content = BytesIO()
+        frame.to_parquet(content, index=False)
+        app.get("file_uploader")[index].upload(f"{name}.parquet", content.getvalue())
+    app.run()
+    app.button[0].click().run()
+
+    assert not app.exception
+    assert not app.error
+    assert any("2026-08-01 — 2026-08-31" in caption.value for caption in app.get("caption"))

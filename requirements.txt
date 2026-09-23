@@ -7,3 +7,4 @@ streamlit>=1.39,<2
 pyvis>=0.3.2,<1
 pytest>=8,<10
 requests>=2.32,<3
+python-dotenv>=1,<2

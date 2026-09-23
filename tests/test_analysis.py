@@ -52,6 +52,38 @@ def test_real_dataset_contract_and_repeatability(tmp_path):
         assert (tmp_path / "first" / name).is_file()
 
 
+def test_changed_valid_dataset_recomputes_all_exports(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    baseline = run_pipeline(root / "data", tmp_path / "baseline")
+    changed_input = tmp_path / "changed_input"
+    changed_input.mkdir()
+    frames = {name: pd.read_parquet(root / "data" / f"{name}.parquet") for name in ("nodes", "edges", "transactions")}
+    edges, transactions = frames["edges"], frames["transactions"]
+
+    top_gid = int(baseline.top.iloc[0].gid)
+    edge_index = edges.loc[edges.dst.eq(top_gid), "sum_kzt"].idxmax()
+    src = int(edges.loc[edge_index, "src"])
+    roles = baseline.roles.set_index("gid")
+    assert roles.loc[src, "role"] == "distributor"
+    assert roles.loc[src, "cluster_id"] == roles.loc[top_gid, "cluster_id"]
+
+    delta = 10_000
+    edges.loc[edge_index, "sum_kzt"] += delta
+    transaction_index = transactions.index[transactions.src.eq(src) & transactions.dst.eq(top_gid)][0]
+    transactions.loc[transaction_index, "sum_kzt"] += delta
+    transactions["date"] = (pd.to_datetime(transactions.date) + pd.DateOffset(months=1)).dt.strftime("%Y-%m-%d")
+    for name, frame in frames.items():
+        frame.to_parquet(changed_input / f"{name}.parquet", index=False)
+
+    changed = run_pipeline(changed_input, tmp_path / "changed_exports")
+    assert changed.transactions.date.min().date().isoformat() == "2026-08-01"
+    before_in = baseline.features.set_index("gid").loc[top_gid, "in_kzt"]
+    after_in = changed.features.set_index("gid").loc[top_gid, "in_kzt"]
+    assert after_in == before_in + delta
+    for name in ("nodes_roles.csv", "clusters.csv", "top_nodes.csv"):
+        assert (tmp_path / "baseline" / name).read_bytes() != (tmp_path / "changed_exports" / name).read_bytes()
+
+
 def test_mismatched_transaction_amount_rejected(tmp_path):
     root = Path(__file__).resolve().parents[1]
     for name in ("nodes", "edges", "transactions"):

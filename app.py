@@ -7,6 +7,7 @@ import os
 
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 
 from analysis import run_pipeline
 from ai_brief import local_brief, model_brief, node_context
@@ -15,6 +16,7 @@ from temporal import daily_activity, temporal_summary
 
 
 ROOT = Path(__file__).parent
+load_dotenv(ROOT / ".env", override=False)
 INPUT_NAMES = ("nodes", "edges", "transactions")
 st.set_page_config(page_title="Граф денег", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""<style>
@@ -23,7 +25,8 @@ st.markdown("""<style>
     div[data-testid="stMetric"] { border-top: 2px solid #e2e9ed; padding-top: .55rem; }
 </style>""", unsafe_allow_html=True)
 st.title("Граф денег")
-st.caption("Внутрибанковские переводы · июль 2026 · аналитические гипотезы для проверки")
+period_caption = st.empty()
+period_caption.caption("Внутрибанковские переводы · аналитические гипотезы для проверки")
 
 with st.sidebar:
     st.subheader("Данные")
@@ -79,6 +82,11 @@ result = st.session_state.result
 if st.session_state.result_source != source or current_hashes != result.manifest["sha256"]:
     st.warning("Входные файлы изменились. Нажмите «Рассчитать», чтобы увидеть результаты новых данных.")
     st.stop()
+
+first_date = result.transactions.date.min().date()
+last_date = result.transactions.date.max().date()
+period = str(first_date) if first_date == last_date else f"{first_date} — {last_date}"
+period_caption.caption(f"Внутрибанковские переводы · {period} · аналитические гипотезы для проверки")
 
 metrics = st.columns(4)
 metrics[0].metric("Клиенты", f"{len(result.roles):,}".replace(",", " "))
