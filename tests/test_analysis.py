@@ -84,6 +84,25 @@ def test_changed_valid_dataset_recomputes_all_exports(tmp_path):
         assert (tmp_path / "baseline" / name).read_bytes() != (tmp_path / "changed_exports" / name).read_bytes()
 
 
+def test_top_explanations_match_weighted_percentiles(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    result = run_pipeline(root / "data", tmp_path)
+    features = result.features.set_index("gid")
+    for row in result.top.itertuples():
+        feature = features.loc[row.gid]
+        contributions = [
+            (.30 * feature.p_seed_reach, f"достижимость от seed {feature.seed_reach:,.2f}"),
+            (.25 * feature.p_in_kzt, f"наблюдаемый вход {feature.in_kzt:,.2f}"),
+            (.20 * max(feature.p_in_deg, feature.p_out_deg),
+             f"число связей {max(feature.in_deg, feature.out_deg):,.2f}"),
+            (.15 * feature.p_betweenness, f"посредничество {feature.betweenness:,.2f}"),
+            (.10 * feature.p_pagerank, f"PageRank {feature.pagerank:,.2f}"),
+        ]
+        assert row.priority_score == round(sum(value for value, _ in contributions), 6)
+        leading = sorted(contributions, reverse=True)[:2]
+        assert row.why.endswith(f"Приоритет: {leading[0][1]}; {leading[1][1]}. Граф неполный.")
+
+
 def test_mismatched_transaction_amount_rejected(tmp_path):
     root = Path(__file__).resolve().parents[1]
     for name in ("nodes", "edges", "transactions"):

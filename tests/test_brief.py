@@ -51,6 +51,8 @@ def test_model_brief_sends_bounded_context_and_validates_response(monkeypatch):
     }
 
     class Response:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -59,7 +61,7 @@ def test_model_brief_sends_bounded_context_and_validates_response(monkeypatch):
                 {"type": "output_text", "text": json_module.dumps(answer)},
             ]}]}
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, allow_redirects):
         assert url == "https://api.openai.com/v1/responses"
         assert json["input"] == json_module.dumps(context, ensure_ascii=False)
         assert json["text"]["format"]["strict"] is True
@@ -70,6 +72,7 @@ def test_model_brief_sends_bounded_context_and_validates_response(monkeypatch):
         assert json["store"] is False
         assert headers["Authorization"] == "Bearer test-key"
         assert timeout == 20
+        assert allow_redirects is False
         return Response()
 
     monkeypatch.setattr(requests, "post", fake_post)
@@ -87,6 +90,8 @@ def test_model_brief_disallows_related_gids_for_isolate(monkeypatch):
     }
 
     class Response:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -95,7 +100,7 @@ def test_model_brief_disallows_related_gids_for_isolate(monkeypatch):
                 {"type": "output_text", "text": json_module.dumps(answer)},
             ]}]}
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, allow_redirects):
         related = json["text"]["format"]["schema"]["properties"]["related_gids"]
         assert related["maxItems"] == 0
         assert "enum" not in related["items"]
@@ -116,6 +121,8 @@ def test_ai_button_success_and_timeout_fallback(monkeypatch):
     }
 
     class Response:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -131,7 +138,7 @@ def test_ai_button_success_and_timeout_fallback(monkeypatch):
     assert not app.exception
     assert any(caption.value == "AI-справка" for caption in app.get("caption"))
     assert any("Основания: достижимость от seed · получатели" in caption.value for caption in app.get("caption"))
-    assert any(answer["summary"] in item.value for item in app.markdown)
+    assert any(answer["summary"] in item.value for item in app.text)
 
     def timeout(*args, **kwargs):
         raise requests.Timeout("test timeout")

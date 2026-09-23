@@ -7,14 +7,15 @@ import re
 
 import requests
 
+from ai_safety import SECURITY_PROMPT, UnsafeAIInput, UnsafeAIOutput, check_data
 from temporal import daily_activity, temporal_summary
 
 
-PROMPT = (
+PROMPT = SECURITY_PROMPT + (
     "You assist a bank AML analyst. Use only the supplied anonymous transfer-graph facts. "
     "Write in Russian. This is a hypothesis for review, never an accusation. "
     "Do not invent identities, transfers, amounts, dates, or other facts. "
-    "Keep numbers out of prose; the application displays verified numbers separately. "
+    "Keep numbers out of prose, including numbers written in words; the application displays verified numbers separately. "
     "Daily overlap does not prove the order or identity of transferred funds. "
     "Cite only evidence_refs and related_gids allowed by the response schema. "
     "Return at most five entries in each list. "
@@ -91,6 +92,7 @@ def validate_brief(brief, context):
     for key in FIELDS[1:]:
         if not isinstance(brief[key], list) or len(brief[key]) > 5 or not all(isinstance(item, str) and 0 < len(item) <= 180 for item in brief[key]):
             raise ValueError(f"Model {key} is invalid")
+    check_data(brief, output=True)
     if set(brief["related_gids"]) - set(context["related_gids"]):
         raise ValueError("Model cited a gid absent from context")
     if set(brief["evidence_refs"]) - set(EVIDENCE_REFS) or not brief["evidence_refs"]:
@@ -101,6 +103,7 @@ def validate_brief(brief, context):
 
 
 def model_brief(context, api_key=None, model=None):
+    check_data(context)
     api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured")
@@ -116,21 +119,32 @@ def model_brief(context, api_key=None, model=None):
         "input": json.dumps(context, ensure_ascii=False),
         "text": {"format": {"type": "json_schema", "name": "analyst_brief", "strict": True, "schema": schema}},
         "store": False,
+        "max_output_tokens": 1200,
     }
     return validate_brief(request_structured(payload, api_key), context)
 
 
 def request_structured(payload, api_key):
+    check_data(payload["input"])
+    if api_key in json.dumps(payload, ensure_ascii=False):
+        raise UnsafeAIInput("Credentials must not be included in model context")
     response = requests.post(
         "https://api.openai.com/v1/responses",
         json=payload,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         timeout=20,
+        allow_redirects=False,
     )
     response.raise_for_status()
+    if 300 <= response.status_code < 400:
+        raise ValueError("AI provider redirects are not allowed")
     body = response.json()
     if body.get("status") != "completed":
         raise ValueError("Model response was not completed")
+    if api_key in json.dumps(body, ensure_ascii=False):
+        raise UnsafeAIOutput("Model response failed the safety check")
+    if any(item.get("type") not in {"message", "reasoning"} for item in body.get("output", [])):
+        raise UnsafeAIOutput("Model response contained an unexpected action")
     for item in body.get("output", []):
         if item.get("type") != "message":
             continue

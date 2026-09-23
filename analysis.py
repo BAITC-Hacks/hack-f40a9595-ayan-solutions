@@ -218,7 +218,7 @@ def build_top(features, roles):
     ordered = joined.sort_values(["priority_score", "gid"], ascending=[False, True]).head(max(20, min(50, len(joined))))
     result = []
     contributions = {
-        "seed": (0.30, "seed_reach", "достижимость от seed"),
+        "seed": (0.30, "p_seed_reach", "достижимость от seed"),
         "in": (0.25, "p_in_kzt", "наблюдаемый вход"),
         "degree": (0.20, None, "число связей"),
         "between": (0.15, "p_betweenness", "посредничество"),

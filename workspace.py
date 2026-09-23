@@ -10,6 +10,7 @@ import streamlit as st
 
 from ai_brief import local_brief, model_brief, node_context
 from ai_chat import FACT_LABELS, MAX_CHAT_TURNS, MAX_QUESTION_CHARS, chat_context, model_answer
+from ai_safety import AI_POLICY_VERSION, UnsafeAIInput, UnsafeAIOutput
 from graph_view import render_neighborhood
 from temporal import daily_activity, temporal_summary
 from ui import ROLE_LABELS, activate_client, client_rows, client_table, filter_clients, number, role_badge, show_legend
@@ -62,10 +63,10 @@ def render_chat(result, gid, analysis_key, brief):
     with st.container(**({"height": 380, "border": False} if chat["turns"] or chat["pending"] else {})):
         for turn in chat["turns"]:
             with st.chat_message("user"):
-                st.write(turn["question"])
+                st.text(turn["question"])
             with st.chat_message("assistant"):
                 answer = turn["answer"]
-                st.write(answer["answer"])
+                st.text(answer["answer"])
                 st.caption("AI-интерпретация: роль является гипотезой, а не установленным фактом.")
                 for ref in answer["evidence_refs"]:
                     value = question_context["facts"][ref]
@@ -82,21 +83,30 @@ def render_chat(result, gid, analysis_key, brief):
                                    f"перевёл выбранному: {number(neighbor['to_selected_kzt'], 2)} KZT · "
                                    f"получил от выбранного: {number(neighbor['from_selected_kzt'], 2)} KZT")
                 if answer["limitations"]:
-                    st.caption("Ограничения: " + " ".join(answer["limitations"]))
+                    st.text("Ограничения: " + " ".join(answer["limitations"]))
         if chat["pending"]:
             with st.chat_message("user"):
-                st.write(chat["pending"])
+                st.text(chat["pending"])
             st.error("Не удалось получить проверенный ответ. Вопрос сохранён.")
             retry = st.button("Повторить", icon=":material/refresh:", key="retry_chat", disabled=not api_available)
+    if chat.get("safety_notice"):
+        st.warning(chat["safety_notice"])
     if not api_available:
         st.caption("AI недоступен: ключ не настроен.")
     submitted = st.chat_input("Уточняющий вопрос по клиенту", max_chars=MAX_QUESTION_CHARS,
                               key=f"question_{chat_id}", disabled=not api_available)
     question = submitted.strip() if submitted else chat["pending"] if retry else None
     if question:
+        chat.pop("safety_notice", None)
         try:
             with st.spinner("Готовим ответ по данным клиента…"):
                 answer = model_answer(question_context, question, history=chat["turns"], brief=brief)
+        except UnsafeAIInput:
+            chat["pending"] = None
+            chat["safety_notice"] = "Запрос не отправлен: обнаружены небезопасные инструкции или содержимое. Задайте вопрос по данным клиента."
+        except UnsafeAIOutput:
+            chat["pending"] = None
+            chat["safety_notice"] = "Ответ AI не прошёл проверку безопасности и не сохранён. Переформулируйте вопрос по данным клиента."
         except Exception:
             chat["pending"] = question
         else:
@@ -108,7 +118,7 @@ def render_chat(result, gid, analysis_key, brief):
 
 def render_ai(result, gid, analysis_key):
     context = node_context(result, gid)
-    current_key = ("daily-v1", analysis_key, gid, context["active_days"], context["same_day_both"])
+    current_key = (AI_POLICY_VERSION, analysis_key, gid, context["active_days"], context["same_day_both"])
     if st.session_state.get("brief_key") != current_key:
         st.session_state.brief = local_brief(context)
         st.session_state.brief_mode = "Правиловая справка"
@@ -124,7 +134,7 @@ def render_ai(result, gid, analysis_key):
                 st.session_state.brief_mode = "Правиловая справка (AI недоступен)"
         brief = st.session_state.brief
         st.caption(st.session_state.brief_mode)
-        st.write(brief["summary"])
+        st.text(brief["summary"])
         evidence_labels = {
             "in_degree": "плательщики", "out_degree": "получатели",
             "in_kzt": "входящая сумма", "out_kzt": "исходящая сумма",
@@ -133,10 +143,10 @@ def render_ai(result, gid, analysis_key):
             "active_days": "активные дни", "same_day_both": "совпадение входа и выхода по дню",
         }
         st.caption("Основания: " + " · ".join(evidence_labels[key] for key in brief["evidence_refs"]))
-        st.write("Следующий запрос: " + " ".join(brief["next_checks"]))
+        st.text("Следующий запрос: " + " ".join(brief["next_checks"]))
         if brief["related_gids"]:
             st.caption("Связанные GID: " + ", ".join(brief["related_gids"]))
-        st.caption("Ограничение: " + " ".join(brief["limitations"]))
+        st.text("Ограничение: " + " ".join(brief["limitations"]))
     render_chat(result, gid, analysis_key, brief)
 
 
@@ -269,9 +279,10 @@ def render_workspace(result, analysis_key):
         reset_filters()
         st.session_state.cluster_detail = int(result.clusters.cluster_id.min())
         st.session_state.view_dataset_key = analysis_key
-    if st.session_state.get("chat_dataset_key") != analysis_key:
+    chat_key = (AI_POLICY_VERSION, analysis_key)
+    if st.session_state.get("chat_dataset_key") != chat_key:
         st.session_state.node_chats = {}
-        st.session_state.chat_dataset_key = analysis_key
+        st.session_state.chat_dataset_key = chat_key
     rows = client_rows(result)
     overview, client, clusters, data = st.tabs(["Обзор", "Клиент", "Кластеры", "Данные"], key="workspace", on_change="rerun")
     with overview:

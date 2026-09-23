@@ -5,7 +5,8 @@ import math
 import os
 import re
 
-from ai_brief import node_context, request_structured
+from ai_brief import FIELDS, node_context, request_structured
+from ai_safety import SECURITY_PROMPT, UnsafeAIOutput, check_data, check_text
 
 
 MAX_QUESTION_CHARS = 1000
@@ -22,7 +23,7 @@ FACT_LABELS = {
     "pass_through": "Наблюдаемый выход / вход", "period": "Период",
     "role_rule": "Правило роли", "score_meaning": "Смысл оценок", "data_limits": "Ограничения данных",
 }
-CHAT_PROMPT = (
+CHAT_PROMPT = SECURITY_PROMPT + (
     "You answer follow-up questions from an AML analyst about the selected anonymous node. "
     "Write a concise, useful answer in Russian to the latest question. Resolve references using "
     "the recent dialogue and current brief, but use graph_context as the only source of facts. "
@@ -90,7 +91,8 @@ def validate_answer(answer, context):
         if (not isinstance(answer[field], list) or len(answer[field]) > maximum
                 or not all(isinstance(item, str) and 0 < len(item) <= length for item in answer[field])):
             raise ValueError(f"Chat {field} is invalid")
-    if set(answer["evidence_refs"]) - set(context["facts"]):
+    check_data(answer, output=True)
+    if not answer["evidence_refs"] or set(answer["evidence_refs"]) - set(context["facts"]):
         raise ValueError("Chat cited unsupported evidence")
     if set(answer["related_gids"]) - set(context["related_gids"]):
         raise ValueError("Chat cited an unknown gid")
@@ -99,9 +101,44 @@ def validate_answer(answer, context):
     return answer
 
 
-def model_answer(context, question, history=(), brief=None, api_key=None, model=None):
+def validate_question(question):
     if not isinstance(question, str) or not question.strip() or len(question) > MAX_QUESTION_CHARS:
         raise ValueError("Question must contain between 1 and 1000 characters")
+    check_text(question)
+    return question.strip()
+
+
+def safe_history(history, context):
+    turns = []
+    for turn in history[-MAX_CHAT_TURNS:]:
+        try:
+            question = validate_question(turn["question"])
+            answer = validate_answer(turn["answer"], context)
+        except (ValueError, KeyError, TypeError):
+            continue
+        turns.append({"question": question, "answer": answer})
+    return turns
+
+
+def safe_brief(brief):
+    if not isinstance(brief, dict) or set(brief) != set(FIELDS):
+        return None
+    if not isinstance(brief["summary"], str) or len(brief["summary"]) > 500:
+        return None
+    for field in FIELDS[1:]:
+        if (not isinstance(brief[field], list) or len(brief[field]) > 5
+                or not all(isinstance(item, str) and len(item) <= 180 for item in brief[field])):
+            return None
+    try:
+        check_data(brief, output=True)
+    except UnsafeAIOutput:
+        return None
+    return brief
+
+
+def model_answer(context, question, history=(), brief=None, api_key=None, model=None):
+    question = validate_question(question)
+    check_data(context)
     api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured")
@@ -113,7 +150,7 @@ def model_answer(context, question, history=(), brief=None, api_key=None, model=
         "type": "object", "additionalProperties": False,
         "properties": {
             "answer": {"type": "string", "minLength": 1, "maxLength": 1600, "pattern": "^[^0-9]*$"},
-            "evidence_refs": {"type": "array", "maxItems": 6,
+            "evidence_refs": {"type": "array", "minItems": 1, "maxItems": 6,
                               "items": {"type": "string", "enum": list(context["facts"])}},
             "related_gids": related,
             "limitations": {"type": "array", "maxItems": 3,
@@ -121,13 +158,12 @@ def model_answer(context, question, history=(), brief=None, api_key=None, model=
         },
         "required": ["answer", "evidence_refs", "related_gids", "limitations"],
     }
-    messages = [{"role": "user", "content": json.dumps({"graph_context": context, "current_brief": brief}, ensure_ascii=False)}]
-    for turn in history[-MAX_CHAT_TURNS:]:
-        messages.extend([
-            {"role": "user", "content": turn["question"]},
-            {"role": "assistant", "content": json.dumps(turn["answer"], ensure_ascii=False)},
-        ])
-    messages.append({"role": "user", "content": question.strip()})
+    # Prior model text stays untrusted data, never a privileged message or fresh evidence.
+    messages = [{"role": "user", "content": json.dumps({
+        "graph_context": context,
+        "untrusted_dialogue": {"current_brief": safe_brief(brief), "history": safe_history(history, context)},
+    }, ensure_ascii=False)}]
+    messages.append({"role": "user", "content": json.dumps({"question": question}, ensure_ascii=False)})
     payload = {
         "model": model or os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         "instructions": CHAT_PROMPT, "input": messages, "store": False, "max_output_tokens": 1200,

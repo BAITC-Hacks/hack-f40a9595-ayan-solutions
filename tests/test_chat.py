@@ -22,6 +22,8 @@ ANSWER = {
 
 
 class Response:
+    status_code = 200
+
     def raise_for_status(self):
         pass
 
@@ -54,19 +56,22 @@ def test_chat_sends_bounded_history_and_current_question(monkeypatch):
     history = [{"question": f"question-{index}", "answer": ANSWER} for index in range(10)]
     captured = []
 
-    def post(url, json, headers, timeout):
+    def post(url, json, headers, timeout, allow_redirects):
         captured.append(json)
         assert headers["Authorization"] == "Bearer test-key"
         assert timeout == 20
+        assert allow_redirects is False
         return Response()
 
     monkeypatch.setattr(requests, "post", post)
     assert model_answer(context, "  Что проверить дальше?  ", history, api_key="test-key") == ANSWER
     payload = captured[0]
-    assert json.loads(payload["input"][0]["content"])["graph_context"] == context
-    assert payload["input"][1]["content"] == history[-MAX_CHAT_TURNS]["question"]
-    assert payload["input"][-1] == {"role": "user", "content": "Что проверить дальше?"}
-    assert len(payload["input"]) == 2 + 2 * MAX_CHAT_TURNS
+    envelope = json.loads(payload["input"][0]["content"])
+    assert envelope["graph_context"] == context
+    assert envelope["untrusted_dialogue"]["history"] == history[-MAX_CHAT_TURNS:]
+    assert json.loads(payload["input"][-1]["content"]) == {"question": "Что проверить дальше?"}
+    assert len(payload["input"]) == 2
+    assert all(message["role"] == "user" for message in payload["input"])
     assert payload["store"] is False
     for question in (" ", "x" * 1001):
         with pytest.raises(ValueError, match="Question"):
@@ -92,7 +97,7 @@ def test_chat_ui_history_node_isolation_retry_and_clear(monkeypatch):
     calls = []
     fail = False
 
-    def post(url, json, headers, timeout):
+    def post(url, json, headers, timeout, allow_redirects):
         calls.append(json)
         if fail:
             raise requests.Timeout("simulated timeout")
@@ -106,7 +111,7 @@ def test_chat_ui_history_node_isolation_retry_and_clear(monkeypatch):
     app.chat_input[0].set_value("А чего не хватает для проверки?").run()
     assert not app.exception
     assert len(app.chat_message) == 4
-    assert calls[-1]["input"][1]["content"] == "Почему такая роль?"
+    assert json.loads(calls[-1]["input"][0]["content"])["untrusted_dialogue"]["history"][0]["question"] == "Почему такая роль?"
     assert any("Плательщики:" in item.value for item in app.get("caption"))
     assert any("AI-интерпретация: роль является гипотезой" in item.value for item in app.get("caption"))
 
