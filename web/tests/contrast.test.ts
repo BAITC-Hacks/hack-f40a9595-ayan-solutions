@@ -30,6 +30,7 @@ test("actual text tokens reach 4.5:1 against workspace surfaces", () => {
     "info",
     "warning",
     "error",
+    "success",
   ])
     for (const surface of ["bg", "surface", "surface-raised", "surface-hover"])
       expect(
@@ -38,6 +39,22 @@ test("actual text tokens reach 4.5:1 against workspace surfaces", () => {
       ).toBeGreaterThanOrEqual(4.5);
   expect(contrast("on-primary", "primary")).toBeGreaterThanOrEqual(4.5);
   expect(contrast("on-primary", "primary-hover")).toBeGreaterThanOrEqual(4.5);
+});
+test("light theme keeps category markers distinct from the canvas", () => {
+  expect(css).toContain("color-scheme: light;");
+  for (const role of [
+    "coordinator",
+    "distributor",
+    "transit",
+    "consolidator",
+    "terminal",
+    "peripheral",
+  ])
+    for (const surface of ["bg", "surface", "surface-raised", "surface-hover"])
+      expect(
+        contrast(`role-${role}`, surface),
+        `${role}/${surface}`,
+      ).toBeGreaterThanOrEqual(3);
 });
 test("control boundaries and focus indicators reach 3:1", () => {
   for (const surface of ["bg", "surface", "surface-raised", "surface-hover"])

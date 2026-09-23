@@ -1,36 +1,36 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: dark;
-  --gm-bg: #08121b;
-  --gm-surface: #0e1b26;
-  --gm-surface-raised: #142635;
-  --gm-surface-hover: #1a3042;
-  --gm-border: #2c4255;
-  --gm-control-border: #6b8399;
-  --gm-text: #edf5fc;
-  --gm-text-muted: #a9bdcf;
-  --gm-text-subtle: #8ea6bb;
+  color-scheme: light;
+  --gm-bg: #f4f6f8;
+  --gm-surface: #ffffff;
+  --gm-surface-raised: #edf1f5;
+  --gm-surface-hover: #e3e9f0;
+  --gm-border: #d4dce5;
+  --gm-control-border: #68788b;
+  --gm-text: #17212f;
+  --gm-text-muted: #475569;
+  --gm-text-subtle: #526174;
   --gm-primary: #2563eb;
   --gm-primary-hover: #1d4ed8;
-  --gm-focus: #7dd3fc;
-  --gm-info: #67d3f1;
-  --gm-success: #4ade80;
-  --gm-warning: #fbbf24;
-  --gm-error: #fb7185;
-  --gm-role-consolidator: #fb7185;
-  --gm-role-coordinator: #fbbf24;
-  --gm-role-distributor: #a78bfa;
-  --gm-role-transit: #60a5fa;
-  --gm-role-terminal: #2dd4bf;
-  --gm-role-peripheral: #94a3b8;
+  --gm-focus: #1d4ed8;
+  --gm-info: #006681;
+  --gm-success: #16733f;
+  --gm-warning: #8a5900;
+  --gm-error: #b42340;
+  --gm-role-consolidator: #d64362;
+  --gm-role-coordinator: #9a6700;
+  --gm-role-distributor: #7c3aed;
+  --gm-role-transit: #2563eb;
+  --gm-role-terminal: #0f8273;
+  --gm-role-peripheral: #66758a;
   --gm-on-primary: #ffffff;
-  --gm-brand: #78a6ff;
-  --gm-edge: #59748a;
-  --gm-edge-arrow: #7891a5;
-  --gm-shadow: #0006;
-  --gm-dialog-shadow: #0008;
-  --gm-overlay: #0009;
+  --gm-brand: #2563eb;
+  --gm-edge: #8593a3;
+  --gm-edge-arrow: #516276;
+  --gm-shadow: #17212f14;
+  --gm-dialog-shadow: #17212f26;
+  --gm-overlay: #17212f40;
 }
 * {
   box-sizing: border-box;
@@ -690,6 +690,7 @@ kbd {
 }
 .graph-legend button {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 5px;
   font-size: 10px;
@@ -2165,7 +2166,10 @@ kbd {
   }
   .graph-legend {
     gap: 12px;
-    height: 34px;
+    height: 44px;
+  }
+  .graph-legend button {
+    min-height: 44px;
   }
   .canvas-note {
     max-width: calc(100% - 160px);
@@ -2330,7 +2334,7 @@ kbd {
 @media (pointer: coarse) {
   .tabs button,
   .mobile-menu,
-  .graph-controls button,
+  .viewport-controls button,
   input:not([type="checkbox"]):not([type="range"]),
   select {
     min-height: 44px;

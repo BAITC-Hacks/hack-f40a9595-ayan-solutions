@@ -35,7 +35,7 @@ export const dateLabel = (date: string) =>
     timeZone: "UTC",
   }).format(new Date(date));
 export const clusterColor = (id: number) =>
-  `hsl(${(id * 137.508 + 25) % 360} 65% 68%)`;
+  `hsl(${(id * 137.508 + 25) % 360} 68% 42%)`;
 export class ApiError extends Error {
   constructor(
     message: string,

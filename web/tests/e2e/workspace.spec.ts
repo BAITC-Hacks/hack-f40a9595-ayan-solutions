@@ -346,6 +346,15 @@ for (const width of [1920, 1512, 1280, 1024, 768, 390])
         () => document.documentElement.scrollWidth <= window.innerWidth,
       ),
     ).toBe(true);
+    expect(
+      await page
+        .locator(".graph-legend button")
+        .evaluateAll((buttons) =>
+          buttons.every(
+            (button) => button.scrollWidth <= button.clientWidth + 1,
+          ),
+        ),
+    ).toBe(true);
     await page.screenshot({ path: `test-results/network-${width}.png` });
     if (width < 1280) {
       const n = graph.nodes.find((n) => n.rank === 1)!;

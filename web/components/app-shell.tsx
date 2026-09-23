@@ -691,7 +691,10 @@ function Workspace() {
             {pending && (
               <div className="notice" role="status">
                 <LoaderCircle size={15} className="spin" />
-                {poll.data?.stage || "Запуск расчёта"} · {run ? "Показаны результаты предыдущего анализа." : "Создаётся первый анализ."}
+                {poll.data?.stage || "Запуск расчёта"} ·{" "}
+                {run
+                  ? "Показаны результаты предыдущего анализа."
+                  : "Создаётся первый анализ."}
               </div>
             )}
           </div>
