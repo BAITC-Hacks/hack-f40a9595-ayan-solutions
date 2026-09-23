@@ -19,14 +19,12 @@ const runPositions = new Map<
   Record<string, { x: number; y: number }>
 >();
 export interface GraphSettings {
-  labels: boolean;
   fixedSize: boolean;
   compact: boolean;
   reducedMotion: boolean;
   inspectorWidth?: number;
 }
 export const defaultSettings: GraphSettings = {
-  labels: false,
   fixedSize: false,
   compact: false,
   reducedMotion: false,
@@ -104,8 +102,8 @@ function GraphCanvas({
           selector: "node",
           style: {
             "background-color": "data(color)",
-            width: "mapData(priority_score, 0, 1, 10, 28)",
-            height: "mapData(priority_score, 0, 1, 10, 28)",
+            width: "mapData(priority_score, 0, 1, 8, 21)",
+            height: "mapData(priority_score, 0, 1, 8, 21)",
             label: "",
             "font-size": 11,
             color: token("text"),
@@ -155,23 +153,12 @@ function GraphCanvas({
           },
         },
         {
-          selector: "node.labelled, node.hover-label, node.zoom-label",
-          style: { label: "data(label)" },
-        },
-        {
-          selector: "node.priority-label",
-          style: { label: "data(label)", "min-zoomed-font-size": 8 },
-        },
-        {
           selector: "node.affected",
           style: { "border-width": 3, "border-color": token("warning") },
         },
       ],
     });
     cyRef.current = cy;
-    cy.nodes()
-      .filter((n) => n.data("rank") <= 5)
-      .addClass("priority-label");
     if (saved) {
       cy.zoom(saved.zoom);
       cy.pan(saved.pan);
@@ -194,34 +181,20 @@ function GraphCanvas({
       const d = el.data();
       const p = e.renderedPosition;
       const text = el.isNode()
-        ? `${d.gid} · ${roles[d.role as keyof typeof roles].label} · Кластер ${d.cluster_id}`
-        : `${d.source} → ${d.target}\n${money(d.sum_kzt)} · ${d.n_tx} переводов`;
+        ? `${roles[d.role as keyof typeof roles].label} · Кластер ${d.cluster_id}`
+        : `${money(d.sum_kzt)} · ${d.n_tx} переводов`;
       setTip({
         x: Math.min(p.x + 12, (host.current?.clientWidth || 400) - 290),
         y: Math.max(10, p.y - 58),
         text,
       });
-      if (el.isNode()) el.addClass("hover-label");
     });
-    cy.on("mouseout", "node,edge", (e) => {
+    cy.on("mouseout", "node,edge", () => {
       setTip(null);
-      e.target.removeClass("hover-label");
     });
     const observer = new ResizeObserver(() => cy.resize());
     observer.observe(host.current);
-    let zoomTimer: ReturnType<typeof setTimeout>;
-    cy.on("zoom", () => {
-      clearTimeout(zoomTimer);
-      zoomTimer = setTimeout(
-        () =>
-          cy.batch(() => {
-            cy.nodes().toggleClass("zoom-label", cy.zoom() >= 0.9);
-          }),
-        120,
-      );
-    });
     return () => {
-      clearTimeout(zoomTimer);
       const positions: Record<string, { x: number; y: number }> = {};
       cy.nodes().forEach((n) => {
         positions[n.id()] = { ...n.position() };
@@ -289,10 +262,9 @@ function GraphCanvas({
             : colorsRef.current[n.data("role")],
         );
         n.style({
-          width: settings.fixedSize ? 16 : 10 + 18 * n.data("priority_score"),
-          height: settings.fixedSize ? 16 : 10 + 18 * n.data("priority_score"),
+          width: settings.fixedSize ? 12 : 8 + 13 * n.data("priority_score"),
+          height: settings.fixedSize ? 12 : 8 + 13 * n.data("priority_score"),
         });
-        n.toggleClass("labelled", settings.labels);
       }),
     );
   }, [colorBy, settings]);

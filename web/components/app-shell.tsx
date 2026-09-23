@@ -1103,7 +1103,6 @@ function Workspace() {
           </label>
           {[
             ["compact", "Компактная таблица"],
-            ["labels", "Подписи узлов"],
             ["fixedSize", "Фиксированный размер узлов"],
             ["reducedMotion", "Уменьшить анимацию"],
           ].map(([key, label]) => (

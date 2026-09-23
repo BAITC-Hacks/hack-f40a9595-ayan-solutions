@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { GraphData, Run } from "../../lib/types";
 import { roles } from "../../lib/utils";
+import type { Core, NodeSingular } from "cytoscape";
 
 let run: Run;
 let graph: GraphData;
@@ -32,6 +33,36 @@ test("full graph, no preselected object, real top and nonblank canvas", async ({
   await expect(canvas).toBeVisible();
   expect((await canvas.screenshot()).length).toBeGreaterThan(5000);
   await page.screenshot({ path: "test-results/network-1440.png" });
+});
+test("smaller nodes show GID only after selection, not hover or zoom", async ({ page }) => {
+  await page.goto(`/network?run=${run.run_id}`);
+  const host = page.locator(".graph-canvas");
+  await expect(host.locator("canvas").last()).toBeVisible();
+  const point = await host.evaluate((element) => {
+    const cy = (element as HTMLElement & { _cyreg: { cy: Core } })._cyreg.cy;
+    const node = cy.nodes().filter((n) => n.data("rank") === 1).first() as NodeSingular;
+    const labels = cy.nodes().filter((n) => Boolean(n.style("label"))).length;
+    const widths = cy.nodes().map((n) => n.width());
+    cy.zoom(1.2);
+    cy.center(node);
+    return { ...node.renderedPosition(), gid: node.id(), labels, maxWidth: Math.max(...widths) };
+  });
+  expect(point.labels).toBe(0);
+  expect(point.maxWidth).toBeLessThanOrEqual(21);
+  await host.hover({ position: { x: point.x, y: point.y } });
+  await expect(page.locator(".graph-tooltip")).toBeVisible();
+  await expect(page.locator(".graph-tooltip")).not.toContainText(point.gid);
+  // Wait beyond the former debounced zoom-label update.
+  await page.waitForTimeout(200);
+  const labels = () => host.evaluate((element) => {
+    const cy = (element as HTMLElement & { _cyreg: { cy: Core } })._cyreg.cy;
+    return cy.nodes().filter((n) => Boolean(n.style("label"))).map((n) => n.id());
+  });
+  expect(await labels()).toEqual([]);
+  await host.click({ position: { x: point.x, y: point.y } });
+  await expect(page.locator(".inspector-header")).toContainText(point.gid);
+  await expect.poll(labels).toEqual([point.gid]);
+  await page.screenshot({ path: "test-results/network-selected-label.png" });
 });
 test("global search selects exact int64 GID and card agrees with CSV DTO", async ({
   page,
