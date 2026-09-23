@@ -1,6 +1,6 @@
 # Status
 
-Started: 2026-09-23 13:43 Asia/Almaty. Deadline: 18:43 Asia/Almaty.
+Started: 2026-09-23 13:43 Asia/Almaty. Deadline corrected by user: 18:00 Asia/Almaty.
 
 Current step: final Git synchronization and demo handoff.
 
