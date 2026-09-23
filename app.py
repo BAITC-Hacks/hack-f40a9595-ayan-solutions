@@ -5,39 +5,37 @@ import hashlib
 import tempfile
 import os
 
-import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
 from analysis import run_pipeline
-from ai_brief import local_brief, model_brief, node_context
-from ai_chat import FACT_LABELS, MAX_CHAT_TURNS, MAX_QUESTION_CHARS, chat_context, model_answer
-from graph_view import ROLE_COLORS, render_neighborhood
-from temporal import daily_activity, temporal_summary
+from workspace import render_workspace
 
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env", override=False)
 INPUT_NAMES = ("nodes", "edges", "transactions")
 st.set_page_config(page_title="Граф денег", layout="wide", initial_sidebar_state="expanded")
-st.markdown("""<style>
-    .block-container { padding-top: 1.35rem; max-width: 1500px; }
-    h1 { font-size: 1.9rem !important; }
-    div[data-testid="stMetric"] { border-top: 2px solid #e2e9ed; padding-top: .55rem; }
-</style>""", unsafe_allow_html=True)
+st.markdown("<style>" + (ROOT / "assets" / "workspace.css").read_text() + "</style>", unsafe_allow_html=True)
 st.title("Граф денег")
 period_caption = st.empty()
-period_caption.caption("Внутрибанковские переводы · аналитические гипотезы для проверки")
+period_caption.caption("Анализ транзакционной сети")
 
 with st.sidebar:
-    st.subheader("Данные")
+    st.subheader("Рабочий набор")
     source = st.radio("Источник", ["Предоставленный набор", "Загрузить parquet"], label_visibility="collapsed")
     uploads = {}
     if source == "Загрузить parquet":
         for name in INPUT_NAMES:
             uploads[name] = st.file_uploader(f"{name}.parquet", type="parquet", key=name)
-    run = st.button("Рассчитать", type="primary", use_container_width=True)
-    st.caption("Полный расчёт выполняется локально. Роль и приоритет — гипотезы, не вывод о виновности.")
+    run = st.button("Рассчитать", type="primary", width="stretch", icon=":material/refresh:")
+    dataset_status = st.empty()
+    st.divider()
+    st.caption("Обработка данных")
+    st.write("Локальный расчёт")
+    st.caption("AI-провайдер")
+    st.write("OpenAI · ключ настроен" if os.getenv("OPENAI_API_KEY") else "Не настроен")
+    st.caption("AI-интерпретации требуют проверки аналитиком.")
 
 if source == "Предоставленный набор":
     input_paths = {name: ROOT / "data" / f"{name}.parquet" for name in INPUT_NAMES}
@@ -71,204 +69,31 @@ if run:
                 st.session_state.result = result
                 st.session_state.result_source = source
                 st.session_state.gid_query = str(int(result.top.iloc[0].gid))
-                st.session_state.last_top_selection = None
+                st.session_state.workspace = "Обзор"
         except Exception as exc:
             st.error(f"Расчёт не выполнен: {exc}")
 
 if "result" not in st.session_state:
-    st.info("Нажмите «Рассчитать», чтобы открыть сеть и список приоритетов.")
+    dataset_status.caption("Ожидает расчёта" if current_hashes else "Набор не укомплектован")
+    st.subheader("Подготовка данных")
+    st.info("Результат расчёта пока отсутствует.")
+    st.dataframe([
+        {"Файл": f"{name}.parquet", "Содержимое": label,
+         "Состояние": "Доступен" if (input_paths[name].is_file() if source == "Предоставленный набор" else name in input_bytes) else "Отсутствует"}
+        for name, label in zip(INPUT_NAMES, ("Клиенты и глубина наблюдения", "Агрегированные направленные связи", "Даты и суммы переводов"))
+    ], hide_index=True, width="stretch")
     st.stop()
 
 result = st.session_state.result
 if st.session_state.result_source != source or current_hashes != result.manifest["sha256"]:
+    dataset_status.caption("Требуется пересчёт")
     st.warning("Входные файлы изменились. Нажмите «Рассчитать», чтобы увидеть результаты новых данных.")
     st.stop()
 
+dataset_status.caption(f"Готово · {result.manifest['seconds']:.2f} с")
 first_date = result.transactions.date.min().date()
 last_date = result.transactions.date.max().date()
 period = str(first_date) if first_date == last_date else f"{first_date} — {last_date}"
-period_caption.caption(f"Внутрибанковские переводы · {period} · аналитические гипотезы для проверки")
+period_caption.caption(f"Внутрибанковские переводы · {period} · {source}")
 analysis_key = (source, tuple(sorted(result.manifest["sha256"].items())), tuple(sorted(result.manifest["config"].items())))
-
-metrics = st.columns(4)
-metrics[0].metric("Клиенты", f"{len(result.roles):,}".replace(",", " "))
-metrics[1].metric("Переводы", f"{len(result.transactions):,}".replace(",", " "))
-metrics[2].metric("Кластеры", len(result.clusters))
-metrics[3].metric("Время расчёта", f"{result.manifest['seconds']:.1f} с")
-
-left, right = st.columns([1.15, 1.45], gap="large")
-with left:
-    st.subheader("Приоритет проверки")
-    shown_top = result.top[["rank", "gid", "role", "priority_score"]].copy()
-    shown_top["gid"] = shown_top.gid.astype(str)
-    selection = st.dataframe(
-        shown_top, hide_index=True, use_container_width=True, height=365,
-        on_select="rerun", selection_mode="single-row",
-        key="top_selection_" + "_".join(value[:12] for value in result.manifest["sha256"].values()),
-        column_config={
-            "rank": st.column_config.NumberColumn("#", width="small"),
-            "gid": st.column_config.TextColumn("GID", width="medium"),
-            "role": st.column_config.TextColumn("Роль", width="small"),
-            "priority_score": st.column_config.NumberColumn("Приоритет", width="small", format="%.3f"),
-        },
-    )
-    selected_rows = selection.selection.rows
-    selected_key = (tuple(result.manifest["sha256"].values()), selected_rows[0]) if selected_rows else None
-    if selected_key is not None and st.session_state.get("last_top_selection") != selected_key:
-        st.session_state.gid_query = str(int(result.top.iloc[selected_rows[0]].gid))
-    st.session_state.last_top_selection = selected_key
-    st.subheader("Найти клиента")
-    default_gid = str(int(result.top.iloc[0].gid))
-    if "gid_query" not in st.session_state:
-        st.session_state.gid_query = default_gid
-    query = st.text_input("GID", key="gid_query", help="Введите синтетический идентификатор клиента")
-    try:
-        gid = int(query.strip())
-    except ValueError:
-        st.error("Введите целочисленный GID.")
-        st.stop()
-    if gid not in result.graph:
-        st.error("Этот GID отсутствует в загруженном наборе.")
-        st.stop()
-    role = result.roles.set_index("gid").loc[gid]
-    feat = result.features.set_index("gid").loc[gid]
-    st.markdown(f"**{gid} · {role.role}**")
-    st.write(role.evidence)
-    details = st.columns(2)
-    details[0].metric("Приоритет", f"{role.priority_score:.3f}")
-    details[1].metric("Сила признаков роли", f"{role.role_score:.3f}")
-    st.caption(f"Кластер {int(role.cluster_id)} · глубина {int(feat.depth)} · seed: {'да' if feat.is_seed else 'нет'}")
-    st.write(f"Вход: {int(feat.in_deg)} плательщиков, {int(feat.in_tx)} переводов, {feat.in_kzt:,.0f} KZT")
-    st.write(f"Выход: {int(feat.out_deg)} получателей, {int(feat.out_tx)} переводов, {feat.out_kzt:,.0f} KZT")
-    daily = daily_activity(result.transactions, gid)
-    timing = temporal_summary(daily)
-    st.write(f"Дни с входом и выходом: {timing['same_day_both']} из {timing['active_days']} активных")
-    if timing["same_day_both"]:
-        st.caption("Совпадение по дню — сигнал для проверки; порядок и связь отдельных переводов неизвестны.")
-    if feat.truncated_by_depth:
-        st.warning("Четвёртое колено: дальнейшие исходящие переводы не наблюдаются.")
-    elif feat.is_seed:
-        st.info("Для seed входящие суммы из-за способа сбора данных могут быть занижены.")
-    st.subheader("Справка аналитика")
-    context = node_context(result, gid)
-    current_key = ("daily-v1", analysis_key, gid, context["active_days"], context["same_day_both"])
-    if st.session_state.get("brief_key") != current_key:
-        st.session_state.brief = local_brief(context)
-        st.session_state.brief_mode = "Правиловая справка"
-        st.session_state.brief_key = current_key
-    if os.getenv("OPENAI_API_KEY") and st.button("Подготовить AI-справку"):
-        try:
-            with st.spinner("Сопоставляем признаки…"):
-                st.session_state.brief = model_brief(context)
-                st.session_state.brief_mode = "AI-справка"
-        except Exception:
-            st.session_state.brief = local_brief(context)
-            st.session_state.brief_mode = "Правиловая справка (AI недоступен)"
-    brief = st.session_state.brief
-    st.caption(st.session_state.brief_mode)
-    st.write(brief["summary"])
-    evidence_labels = {
-        "in_degree": "плательщики", "out_degree": "получатели",
-        "in_kzt": "входящая сумма", "out_kzt": "исходящая сумма",
-        "seed_reach": "достижимость от seed", "cluster_id": "кластер",
-        "depth": "колено", "role": "роль", "priority_score": "приоритет",
-        "active_days": "активные дни", "same_day_both": "совпадение входа и выхода по дню",
-    }
-    st.caption("Основания: " + " · ".join(evidence_labels[key] for key in brief["evidence_refs"]))
-    st.write("Следующий запрос: " + " ".join(brief["next_checks"]))
-    if brief["related_gids"]:
-        st.caption("Связанные GID: " + ", ".join(brief["related_gids"]))
-    st.caption("Ограничение: " + " ".join(brief["limitations"]))
-    with st.expander("Активность по дням"):
-        if daily.empty:
-            st.write("Переводов в наблюдаемом наборе нет.")
-        else:
-            st.bar_chart(daily[["in_kzt", "out_kzt"]].rename(columns={"in_kzt": "Вход, KZT", "out_kzt": "Выход, KZT"}), height=230)
-            st.caption(f"Максимум за день: вход {timing['max_daily_in_kzt']:,.0f} KZT, выход {timing['max_daily_out_kzt']:,.0f} KZT.")
-    with st.expander("Контрагенты и суммы"):
-        incoming = result.edges[result.edges.dst.eq(gid)][["src", "sum_kzt", "n_tx"]].sort_values("sum_kzt", ascending=False)
-        outgoing = result.edges[result.edges.src.eq(gid)][["dst", "sum_kzt", "n_tx"]].sort_values("sum_kzt", ascending=False)
-        st.write("Входящие")
-        st.dataframe(incoming, hide_index=True, use_container_width=True)
-        st.write("Исходящие")
-        st.dataframe(outgoing, hide_index=True, use_container_width=True)
-
-with right:
-    header, switch = st.columns([2, 1])
-    header.subheader("Сеть переводов")
-    color_by = switch.segmented_control("Цвет", ["Роль", "Кластер"], default="Роль")
-    html, shown, links, hidden = render_neighborhood(result, gid, "role" if color_by == "Роль" else "cluster")
-    st.components.v1.html(html, height=585, scrolling=False)
-    st.caption(f"Показано {shown} узлов и {links} связей. Скрытых соседей выбранного клиента: {hidden}. Стрелки указывают направление денег.")
-    if color_by == "Роль":
-        st.caption(" · ".join(f"{name}: {color}" for name, color in ROLE_COLORS.items()))
-    st.subheader("Кластеры")
-    st.dataframe(result.clusters[["cluster_id", "n_nodes", "n_seed", "sum_kzt_internal", "hypothesis"]], hide_index=True, use_container_width=True, height=210)
-
-st.divider()
-with st.container():
-    if st.session_state.get("chat_dataset_key") != analysis_key:
-        st.session_state.node_chats = {}
-        st.session_state.chat_dataset_key = analysis_key
-    chat = st.session_state.node_chats.setdefault(gid, {"turns": [], "pending": None})
-    chat_id = hashlib.sha256(repr((analysis_key, gid)).encode()).hexdigest()[:16]
-    chat_header, chat_actions = st.columns([12, 1])
-    chat_header.subheader("Вопросы по клиенту")
-    chat_header.caption(f"GID {gid} · {role.role}")
-    if chat_actions.button("", icon=":material/delete:", help="Очистить диалог", key="clear_chat"):
-        chat = {"turns": [], "pending": None}
-        st.session_state.node_chats[gid] = chat
-    question_context = chat_context(result, gid)
-    api_available = bool(os.getenv("OPENAI_API_KEY"))
-    retry = False
-    with st.container(**({"height": 380, "border": False} if chat["turns"] or chat["pending"] else {})):
-        for turn in chat["turns"]:
-            with st.chat_message("user"):
-                st.write(turn["question"])
-            with st.chat_message("assistant"):
-                answer = turn["answer"]
-                st.write(answer["answer"])
-                st.caption("AI-интерпретация: роль является гипотезой, а не установленным фактом. Основания из расчёта:")
-                for ref in answer["evidence_refs"]:
-                    value = question_context["facts"][ref]
-                    if value is None:
-                        value = "не определяется"
-                    elif isinstance(value, bool):
-                        value = "да" if value else "нет"
-                    elif isinstance(value, float):
-                        value = f"{value:,.2f}".replace(",", " ") if ref in ("in_kzt", "out_kzt") else f"{value:.6g}"
-                    st.caption(f"{FACT_LABELS[ref]}: {value}")
-                for neighbor in question_context["neighbors"]:
-                    if neighbor["gid"] in answer["related_gids"]:
-                        st.caption(f"GID {neighbor['gid']} · {neighbor['role']} · "
-                                   f"перевёл выбранному: {neighbor['to_selected_kzt']:,.2f} KZT · "
-                                   f"получил от выбранного: {neighbor['from_selected_kzt']:,.2f} KZT")
-                if answer["limitations"]:
-                    st.caption("Ограничения: " + " ".join(answer["limitations"]))
-        if chat["pending"]:
-            with st.chat_message("user"):
-                st.write(chat["pending"])
-            st.error("Не удалось получить проверенный ответ. Вопрос сохранён.")
-            retry = st.button("Повторить", icon=":material/refresh:", key="retry_chat", disabled=not api_available)
-    if not api_available:
-        st.caption("AI недоступен: ключ не настроен.")
-    submitted = st.chat_input("Уточняющий вопрос по клиенту", max_chars=MAX_QUESTION_CHARS,
-                              key=f"question_{chat_id}", disabled=not api_available)
-    question = submitted.strip() if submitted else chat["pending"] if retry else None
-    if question:
-        try:
-            with st.spinner("Готовим ответ по данным клиента…"):
-                answer = model_answer(question_context, question, history=chat["turns"], brief=brief)
-        except Exception:
-            chat["pending"] = question
-        else:
-            chat["turns"].append({"question": question, "answer": answer})
-            chat["turns"] = chat["turns"][-MAX_CHAT_TURNS:]
-            chat["pending"] = None
-        st.rerun()
-
-st.divider()
-st.subheader("Выгрузки")
-downloads = st.columns(3)
-for column, (filename, data) in zip(downloads, [("nodes_roles.csv", result.roles), ("clusters.csv", result.clusters), ("top_nodes.csv", result.top)]):
-    column.download_button(filename, data.to_csv(index=False).encode("utf-8-sig"), file_name=filename, mime="text/csv", use_container_width=True)
+render_workspace(result, analysis_key)

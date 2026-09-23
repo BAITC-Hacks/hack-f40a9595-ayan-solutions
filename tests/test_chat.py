@@ -101,7 +101,7 @@ def test_chat_ui_history_node_isolation_retry_and_clear(monkeypatch):
     monkeypatch.setattr(requests, "post", post)
     app = AppTest.from_file(ROOT / "app.py", default_timeout=15).run()
     app.button[0].click().run()
-    first_gid = int(app.text_input[0].value)
+    first_gid = int(app.text_input(key="gid_query").value)
     app.chat_input[0].set_value("Почему такая роль?").run()
     app.chat_input[0].set_value("А чего не хватает для проверки?").run()
     assert not app.exception
@@ -111,12 +111,12 @@ def test_chat_ui_history_node_isolation_retry_and_clear(monkeypatch):
     assert any("AI-интерпретация: роль является гипотезой" in item.value for item in app.get("caption"))
 
     second_gid = int(app.session_state.result.top.iloc[1].gid)
-    app.text_input[0].set_value(str(second_gid)).run()
+    app.text_input(key="gid_query").set_value(str(second_gid)).run()
     assert not app.chat_message
     app.chat_input[0].set_value("Почему этот клиент в списке?").run()
     assert len(calls[-1]["input"]) == 2
     assert json.loads(calls[-1]["input"][0]["content"])["graph_context"]["gid"] == str(second_gid)
-    app.text_input[0].set_value(str(first_gid)).run()
+    app.text_input(key="gid_query").set_value(str(first_gid)).run()
     assert len(app.chat_message) == 4
     app.button(key="clear_chat").click().run()
     assert not app.chat_message

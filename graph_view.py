@@ -1,7 +1,9 @@
 """A bounded, self-contained view of a selected node's directed neighborhood."""
 
 import math
+from pathlib import Path
 
+from jinja2 import ChoiceLoader, FileSystemLoader
 from pyvis.network import Network
 
 
@@ -33,16 +35,19 @@ def render_neighborhood(result, gid, color_by="role", limit=170):
         if len(selected) >= limit:
             break
     # Include visible ties between displayed neighbors, keeping the drawing bounded.
-    net = Network(height="570px", width="100%", directed=True, bgcolor="#ffffff", font_color="#27333b", cdn_resources="in_line")
-    net.set_options('''{"physics":{"enabled":true,"stabilization":{"iterations":140}},"interaction":{"hover":true,"navigationButtons":true},"edges":{"smooth":{"type":"dynamic"},"arrows":{"to":{"enabled":true,"scaleFactor":0.75}},"color":{"color":"#a7b2b8"}},"nodes":{"font":{"face":"Arial","size":13}}}''')
+    net = Network(height="430px", width="100%", directed=True, bgcolor="#f8faf9", font_color="#202b2b", cdn_resources="in_line")
+    net.templateEnv.loader = ChoiceLoader([FileSystemLoader(str(Path(__file__).parent / "assets")), net.templateEnv.loader])
+    net.path = "network.html"
+    net.set_options('''{"layout":{"randomSeed":19},"physics":{"enabled":true,"stabilization":{"iterations":140}},"interaction":{"hover":true,"navigationButtons":true,"keyboard":{"enabled":true,"bindToWindow":false}},"edges":{"smooth":{"type":"continuous","roundness":0.12},"arrows":{"to":{"enabled":true,"scaleFactor":0.55}},"color":{"color":"#a8b8b3","highlight":"#187569"}},"nodes":{"font":{"face":"Arial","size":12,"strokeWidth":3,"strokeColor":"#f8faf9"}}}''')
     for node in sorted(selected):
         row = rows.loc[node]
         color = ROLE_COLORS[row.role] if color_by == "role" else CLUSTER_COLORS[int(row.cluster_id) % len(CLUSTER_COLORS)]
-        net.add_node(str(node), label=str(node) if node == gid else " ", title=f"GID {node} | {row.role} | приоритет {row.priority_score:.3f}", color=color,
-                     size=31 if node == gid else 13 + 19 * float(row.priority_score), borderWidth=3 if node == gid else 1,
+        net.add_node(str(node), label="Выбранный клиент" if node == gid else " ", title=f"GID {node} | {row.role} | приоритет {row.priority_score:.3f}",
+                     color={"background": color, "border": "#202b2b" if node == gid else color},
+                     size=23 if node == gid else 8 + 13 * float(row.priority_score), borderWidth=3 if node == gid else 1,
                      shape="dot")
     visible_edges = sorted(((u, v, a) for u, v, a in graph.edges(data=True) if u in selected and v in selected), key=lambda x: (x[0], x[1]))
     for source, target, attrs in visible_edges:
         amount = float(attrs["sum_kzt"])
-        net.add_edge(str(source), str(target), title=f"{amount:,.0f} KZT; {attrs['n_tx']} переводов", width=min(7, 1 + math.log10(max(amount, 1)) / 2))
+        net.add_edge(str(source), str(target), title=f"{amount:,.2f} KZT; {attrs['n_tx']} переводов", width=min(2.5, .6 + math.log10(max(amount, 1)) / 5))
     return net.generate_html(), len(selected), len(visible_edges), len(set(graph.predecessors(gid)) | set(graph.successors(gid))) - (len(selected) - 1)
